@@ -1,0 +1,52 @@
+/* Fixed, efficient sidebar styling */
+.sidebar {
+  width: 60px; /* Slim design prevents clutter */
+  background: #111111; /* Darker than content to recede visually */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 12px;
+  border-right: 1px solid #2a2a2a;
+  z-index: 10;
+  height: 100%;
+}
+
+.nav-item {
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #666;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.25, 1, 0.5, 1);
+  background: transparent;
+  border: none;
+}
+
+.nav-item:hover {
+  background: #222;
+  color: #bbb;
+}
+
+.nav-item.active {
+  background: #2a2a2a; /* Subtle highlight */
+  color: #ffffff;
+  box-shadow: 0 0 10px rgba(0,0,0,0.5);
+}
+
+.spacer {
+  flex-grow: 1;
+}
+
+/* Specific logout/lock button styling for bottom */
+.nav-item.danger {
+  color: #8b3a3a;
+  margin-bottom: 20px;
+}
+.nav-item.danger:hover {
+  background: #2b1111;
+  color: #ff4d4d;
+}

@@ -1,0 +1,12 @@
+[package]
+name = "aura"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.103"
+keepass = "0.13.10"
+rand = "0.8.5"
+sequoia-openpgp = { version = "2.3.0", default-features = false, features = ["crypto-cng"] }
+windows-sys = { version = "0.61.2", features = ["Win32_System_Diagnostics_Debug", "Win32_System_Threading"] }
+zeroize = { version = "1.9.0", features = ["derive"] }

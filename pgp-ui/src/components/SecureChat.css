@@ -1,0 +1,122 @@
+.chat-layout {
+  display: flex;
+  height: 100%; /* Fill the parent completely */
+  background: #1a1a1a;
+  color: white;
+}
+
+/* --- Left Panel: Contacts --- */
+.contacts-pane {
+  width: 260px;
+  border-right: 1px solid #2a2a2a;
+  background: #181818;
+  display: flex;
+  flex-direction: column;
+}
+
+.search-bar {
+  padding: 12px;
+  border-bottom: 1px solid #2a2a2a;
+}
+
+.search-input {
+  width: 100%;
+  background: #0a0a0a;
+  border: 1px solid #333;
+  padding: 8px;
+  border-radius: 4px;
+  color: white;
+  outline: none;
+}
+.search-input:focus { border-color: #555; }
+
+.contact-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.contact-item {
+  padding: 12px 16px;
+  cursor: pointer;
+  border-bottom: 1px solid #1f1f1f;
+  transition: background 0.2s;
+}
+.contact-item:hover { background: #222; }
+.contact-item.active { background: #2a2a2a; border-left: 3px solid #0066ff; }
+
+/* --- Right Panel: Thread --- */
+.thread-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  background: #151515; /* Slightly darker background for text */
+}
+
+.thread-header {
+  height: 50px;
+  border-bottom: 1px solid #2a2a2a;
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  font-weight: 600;
+  justify-content: space-between;
+}
+
+.message-area {
+  flex: 1;
+  padding: 20px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.msg {
+  max-width: 70%;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 1.4;
+  position: relative;
+}
+
+/* User Sent Message */
+.msg.sent {
+  align-self: flex-end;
+  background: #0052cc;
+  color: white;
+}
+
+/* Received Message */
+.msg.received {
+  align-self: flex-start;
+  background: #2a2a2a;
+  color: #ddd;
+}
+
+/* Metadata (Timer/Status) */
+.msg-meta {
+  font-size: 10px;
+  opacity: 0.6;
+  margin-top: 4px;
+  text-align: right;
+}
+
+/* Input Area */
+.input-area {
+  padding: 16px;
+  border-top: 1px solid #2a2a2a;
+  display: flex;
+  background: #181818;
+}
+
+.msg-input {
+  flex: 1;
+  background: #0a0a0a;
+  border: 1px solid #333;
+  padding: 10px;
+  border-radius: 4px;
+  color: white;
+  margin-right: 10px;
+}
