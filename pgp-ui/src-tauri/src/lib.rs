@@ -67,7 +67,7 @@ fn save_vault(pub_key_bytes: Vec<u8>, priv_key_bytes: Vec<u8>, passphrase: &str,
 #[tauri::command]
 fn load_vault(passphrase: &str, path: String) -> Result<(Vec<u8>, Vec<u8>), String> {
     match aura::load_identity_from_vault(passphrase, &PathBuf::from(path)) {
-        Ok(identity) => Ok((identity.public_key.bytes, identity.private_key.bytes)),
+        Ok(identity) => Ok((identity.public_key.bytes.clone(), identity.private_key.bytes.clone())),
         Err(e) => Err(e.to_string()),
     }
 }

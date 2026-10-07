@@ -319,12 +319,9 @@ pub fn unlock_vault(kdbx_bytes: &[u8], passphrase: &str) -> Result<()> {
     Ok(())
 }
 
-use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
-    Argon2,
-};
+use argon2::Argon2;
 use chacha20poly1305::{
-    aead::{Aead, KeyInit, Payload},
+    aead::{Aead, KeyInit},
     XChaCha20Poly1305, XNonce,
 };
 use rand::Rng;
@@ -338,15 +335,12 @@ pub fn save_identity_to_vault(identity: &Identity, passphrase: &str, path: &Path
     data.extend_from_slice(&identity.private_key.bytes);
 
     // 2. Derive key using Argon2
-    let salt = SaltString::generate(&mut OsRng);
-    let argon2 = Argon2::default();
-    let password_hash = argon2.hash_password(passphrase.as_bytes(), &salt).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    let mut salt_bytes = [0u8; 16];
+    rand::thread_rng().fill(&mut salt_bytes);
     
-    // Create a 32-byte key from the hash output (simple truncation/padding for this demo)
-    let hash_bytes = password_hash.hash.unwrap();
     let mut key_bytes = [0u8; 32];
-    let copy_len = std::cmp::min(32, hash_bytes.len());
-    key_bytes[..copy_len].copy_from_slice(&hash_bytes.as_bytes()[..copy_len]);
+    Argon2::default().hash_password_into(passphrase.as_bytes(), &salt_bytes, &mut key_bytes)
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
     // 3. Encrypt with XChaCha20Poly1305
     let cipher = XChaCha20Poly1305::new(&key_bytes.into());
@@ -359,9 +353,7 @@ pub fn save_identity_to_vault(identity: &Identity, passphrase: &str, path: &Path
     // 4. Save to file (Salt + Nonce + Ciphertext)
     let mut out_file = std::fs::File::create(path)?;
     use std::io::Write;
-    let salt_bytes = salt.as_str().as_bytes();
-    out_file.write_all(&(salt_bytes.len() as u32).to_le_bytes())?;
-    out_file.write_all(salt_bytes)?;
+    out_file.write_all(&salt_bytes)?;
     out_file.write_all(&nonce_bytes)?;
     out_file.write_all(&ciphertext)?;
 
@@ -372,14 +364,8 @@ pub fn load_identity_from_vault(passphrase: &str, path: &Path) -> Result<Identit
     use std::io::Read;
     let mut in_file = std::fs::File::open(path)?;
     
-    let mut salt_len_bytes = [0u8; 4];
-    in_file.read_exact(&mut salt_len_bytes)?;
-    let salt_len = u32::from_le_bytes(salt_len_bytes) as usize;
-    
-    let mut salt_bytes = vec![0u8; salt_len];
+    let mut salt_bytes = [0u8; 16];
     in_file.read_exact(&mut salt_bytes)?;
-    let salt_str = std::str::from_utf8(&salt_bytes)?;
-    let salt = SaltString::new(salt_str).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
     let mut nonce_bytes = [0u8; 24];
     in_file.read_exact(&mut nonce_bytes)?;
@@ -388,13 +374,9 @@ pub fn load_identity_from_vault(passphrase: &str, path: &Path) -> Result<Identit
     in_file.read_to_end(&mut ciphertext)?;
 
     // Derive key using Argon2
-    let argon2 = Argon2::default();
-    let password_hash = argon2.hash_password(passphrase.as_bytes(), &salt).map_err(|e| anyhow::anyhow!(e.to_string()))?;
-    
-    let hash_bytes = password_hash.hash.unwrap();
     let mut key_bytes = [0u8; 32];
-    let copy_len = std::cmp::min(32, hash_bytes.len());
-    key_bytes[..copy_len].copy_from_slice(&hash_bytes.as_bytes()[..copy_len]);
+    Argon2::default().hash_password_into(passphrase.as_bytes(), &salt_bytes, &mut key_bytes)
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
     // Decrypt
     let cipher = XChaCha20Poly1305::new(&key_bytes.into());
