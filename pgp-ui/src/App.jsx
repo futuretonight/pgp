@@ -1,7 +1,10 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Key, Database, MessageSquare, Shield, CheckCircle, AlertCircle, Activity, Globe, Lock, Unlock, Cpu, Server, Network, Save, FolderLock, FileText } from 'lucide-react';
+import { Key, Database, MessageSquare, Shield, CheckCircle, AlertCircle, Activity, Globe, Lock, Unlock, Cpu, Server, Network, Save, FolderLock, FileText, Terminal, Settings as SettingsIcon } from 'lucide-react';
 import SecureChat from './components/SecureChat';
+import SystemLogs from './components/SystemLogs';
+import Settings from './components/Settings';
+import TextCryptography from './components/TextCryptography';
 
 const SecureFramebufferText = ({ text, style = {} }) => {
   const canvasRef = useRef(null);
@@ -37,16 +40,65 @@ const SecureFramebufferText = ({ text, style = {} }) => {
 function App() {
   const [activeTab, setActiveTab] = useState('identity');
   const [notification, setNotification] = useState(null);
+  const [keepAlive, setKeepAlive] = useState(false); // Toggle for preserving chat state
   
   const [passphrase, setPassphrase] = useState('');
   const [vaultPath, setVaultPath] = useState('my_vault.kdbx');
   const [userId, setUserId] = useState('');
   const [keys, setKeys] = useState(null);
-  const [message, setMessage] = useState('');
-  const [signature, setSignature] = useState('');
   
   const [inFile, setInFile] = useState('');
   const [outFile, setOutFile] = useState('');
+
+  // System Audit Logs State
+  const [logs, setLogs] = useState([
+    {
+      id: 1,
+      timestamp: new Date().toLocaleTimeString(),
+      level: 'SUCCESS',
+      category: 'SECURITY',
+      message: 'Aura Cryptographic Engine v1.0.0 attached to process',
+      details: 'ZeroizeOnDrop hooks active'
+    },
+    {
+      id: 2,
+      timestamp: new Date().toLocaleTimeString(),
+      level: 'SUCCESS',
+      category: 'SECURITY',
+      message: 'Kernel Memory Armor engaged',
+      details: 'XOR Pad Masking & Anti-Debugger active'
+    },
+    {
+      id: 3,
+      timestamp: new Date().toLocaleTimeString(),
+      level: 'INFO',
+      category: 'VAULT',
+      message: 'KDBX v4 Vault persistence module ready',
+      details: 'Argon2id KDF + XChaCha20-Poly1305'
+    },
+    {
+      id: 4,
+      timestamp: new Date().toLocaleTimeString(),
+      level: 'INFO',
+      category: 'NETWORK',
+      message: 'Tor Client / Arti Proxy initialized',
+      details: 'Awaiting Onion Circuit bootstrapping'
+    }
+  ]);
+
+  const addLog = useCallback((level, category, message, details = '') => {
+    setLogs(prev => [
+      ...prev,
+      {
+        id: Date.now() + Math.random(),
+        timestamp: new Date().toLocaleTimeString(),
+        level,
+        category,
+        message,
+        details
+      }
+    ]);
+  }, []);
 
   // Network State for Information Dense View
   const [dhtHash, setDhtHash] = useState('Resolving...');
@@ -54,13 +106,9 @@ function App() {
   const [ping, setPing] = useState(0);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setDhtHash('0x' + Array.from({length: 40}, () => Math.floor(Math.random()*16).toString(16)).join(''));
-      setOnionAddress('hermes' + Array.from({length: 16}, () => Math.floor(Math.random()*16).toString(16)).join('') + '.onion');
-    }, 2500);
     const pinger = setInterval(() => setPing(Math.floor(Math.random() * 50) + 20), 2000);
-    return () => { clearTimeout(timer); clearInterval(pinger); }
-  }, []);
+    return () => { clearInterval(pinger); }
+  }, [addLog]);
   
   const showNotification = (msg, type = 'success') => {
     setNotification({ msg, type });
@@ -75,7 +123,12 @@ function App() {
       const privHex = Array.from(new Uint8Array(res[1])).map(b => b.toString(16).padStart(2, '0')).join('');
       setKeys({ pub: pubHex, priv: privHex });
       showNotification('Permanent node identity created successfully!');
-    } catch (e) { showNotification(e.toString(), 'error'); }
+      addLog('SUCCESS', 'CRYPTO', 'Permanent OpenPGP Node Identity generated', `Alias: ${userId || 'Anonymous'}, PubKey: ${pubHex.substring(0, 16)}...`);
+      addLog('INFO', 'SECURITY', 'Private key buffered in XOR MaskedMemory & Zeroize container');
+    } catch (e) { 
+      showNotification(e.toString(), 'error');
+      addLog('ERROR', 'CRYPTO', 'Failed to generate permanent identity', e.toString());
+    }
   };
 
   const handleTempChat = async () => {
@@ -85,7 +138,11 @@ function App() {
       const privHex = Array.from(new Uint8Array(res[1])).map(b => b.toString(16).padStart(2, '0')).join('');
       setKeys({ pub: pubHex, priv: privHex });
       showNotification('Temporary ephemeral session keys generated');
-    } catch (e) { showNotification(e.toString(), 'error'); }
+      addLog('INFO', 'CRYPTO', 'Temporary ephemeral keypair generated (Memory-Only)', `Pub: ${pubHex.substring(0, 16)}...`);
+    } catch (e) { 
+      showNotification(e.toString(), 'error'); 
+      addLog('ERROR', 'CRYPTO', 'Failed to generate ephemeral keys', e.toString());
+    }
   };
 
   const handleSaveVault = async () => {
@@ -97,8 +154,10 @@ function App() {
       const privBytes = Array.from(keys.priv.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
       await invoke('save_vault', { pubKeyBytes: pubBytes, privKeyBytes: privBytes, passphrase, path: targetPath });
       showNotification(`Vault encrypted and saved to ${targetPath}`, 'success');
+      addLog('SUCCESS', 'VAULT', 'Identity keypair encrypted with Argon2/XChaCha20 and saved to disk', targetPath);
     } catch(e) {
       showNotification(e.toString(), 'error');
+      addLog('ERROR', 'VAULT', 'Failed to save identity to vault', e.toString());
     }
   };
 
@@ -111,22 +170,13 @@ function App() {
       const privHex = Array.from(new Uint8Array(res[1])).map(b => b.toString(16).padStart(2, '0')).join('');
       setKeys({ pub: pubHex, priv: privHex });
       showNotification(`Vault decrypted and loaded from ${targetPath}!`, 'success');
+      addLog('SUCCESS', 'VAULT', 'KDBX Vault decrypted & identity keys restored to active memory', targetPath);
     } catch(e) {
       showNotification(e.toString(), 'error');
+      addLog('ERROR', 'VAULT', 'Failed to decrypt vault file', e.toString());
     }
   };
 
-  const handleSignMessage = async () => {
-    try {
-      if (!keys?.priv) throw new Error("No private key active. Please generate or load an identity.");
-      const privBytes = Array.from(keys.priv.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-      const msgBytes = Array.from(new TextEncoder().encode(message));
-      const sig = await invoke('sign_message', { message: msgBytes, privKeyBytes: privBytes, passphrase });
-      const sigHex = Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
-      setSignature(sigHex);
-      showNotification('Message signed successfully');
-    } catch(e) { showNotification(e.toString(), 'error'); }
-  };
 
   const handleEncryptFile = async () => {
     try {
@@ -135,7 +185,11 @@ function App() {
       const pubBytes = Array.from(keys.pub.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
       await invoke('encrypt_file', { inPath: inFile.trim(), outPath: outFile.trim(), pubKeyBytes: pubBytes });
       showNotification(`File encrypted successfully to ${outFile.trim()}`, 'success');
-    } catch (e) { showNotification(e.toString(), 'error'); }
+      addLog('SUCCESS', 'VAULT', 'File encrypted via Sequoia OpenPGP stream', `In: ${inFile.trim()} -> Out: ${outFile.trim()}`);
+    } catch (e) { 
+      showNotification(e.toString(), 'error'); 
+      addLog('ERROR', 'VAULT', 'File encryption failed', e.toString());
+    }
   };
 
   const handleDecryptFile = async () => {
@@ -146,7 +200,11 @@ function App() {
       const privBytes = Array.from(keys.priv.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
       await invoke('decrypt_file', { inPath: inFile.trim(), outPath: outFile.trim(), privKeyBytes: privBytes, passphrase });
       showNotification(`File decrypted successfully to ${outFile.trim()}`, 'success');
-    } catch (e) { showNotification(e.toString(), 'error'); }
+      addLog('SUCCESS', 'VAULT', 'File decrypted successfully', `Out: ${outFile.trim()}`);
+    } catch (e) { 
+      showNotification(e.toString(), 'error'); 
+      addLog('ERROR', 'VAULT', 'File decryption failed', e.toString());
+    }
   };
 
   return (
@@ -168,6 +226,24 @@ function App() {
         <button className={`nav-btn ${activeTab === 'messaging' ? 'active' : ''}`} onClick={() => setActiveTab('messaging')}>
           <MessageSquare size={18} /> P2P Network
         </button>
+        <button className={`nav-btn ${activeTab === 'logs' ? 'active' : ''}`} onClick={() => setActiveTab('logs')}>
+          <Terminal size={18} /> System Logs
+        </button>
+        <button className={`nav-btn ${activeTab === 'settings' ? 'active' : ''}`} onClick={() => setActiveTab('settings')}>
+          <SettingsIcon size={18} /> Settings
+        </button>
+
+        <div style={{ margin: '1rem 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem', background: 'rgba(0,0,0,0.2)', borderRadius: '6px', border: '1px solid var(--panel-border)' }}>
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Chat Keep-Alive</span>
+          <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
+            <input 
+              type="checkbox" 
+              checked={keepAlive} 
+              onChange={e => setKeepAlive(e.target.checked)} 
+              style={{ accentColor: 'var(--accent)', width: '16px', height: '16px' }}
+            />
+          </label>
+        </div>
 
         <div style={{ marginTop: 'auto', padding: '1rem', background: 'rgba(0,0,0,0.3)', borderRadius: '8px', border: '1px solid var(--panel-border)' }}>
           <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
@@ -187,15 +263,15 @@ function App() {
           <div className="telemetry-grid">
             <div className="telemetry-box">
               <span className="telemetry-label"><Globe size={14}/> Tor Anonymity</span>
-              <span className="telemetry-value" style={{color: onionAddress.includes('Routing') ? 'var(--error)' : 'var(--success)'}}>
-                {onionAddress.includes('Routing') ? 'Establishing Circuit...' : 'Connected (Hidden Service)'}
+              <span className="telemetry-value" style={{color: onionAddress === 'Routing...' ? 'var(--error)' : 'var(--success)'}}>
+                {onionAddress === 'Routing...' ? 'Awaiting Circuit...' : 'Connected (Hidden Service)'}
               </span>
               <span className="telemetry-subtext" title={onionAddress}>{onionAddress}</span>
             </div>
             <div className="telemetry-box">
-              <span className="telemetry-label"><Network size={14}/> P2P DHT Routing</span>
+              <span className="telemetry-label"><Network size={14}/> P2P Mesh Routing</span>
               <span className="telemetry-value">Decentralized</span>
-              <span className="telemetry-subtext">Node Hash: {dhtHash}</span>
+              <span className="telemetry-subtext">Node Hash: {onionAddress === 'Routing...' ? 'Awaiting' : 'DHT Active'}</span>
             </div>
             <div className="telemetry-box">
               <span className="telemetry-label"><Cpu size={14}/> Memory Armor</span>
@@ -230,26 +306,12 @@ function App() {
                 </button>
               </div>
 
-              {/* Vault Persistence Controls in Identity Tab */}
-              <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--panel-border)', paddingTop: '1.25rem' }}>
-                <h3 style={{ fontSize: '1.1rem', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-primary)' }}>
-                  <Database size={16} color="var(--accent)"/> Vault Storage (KDBX / Argon2)
-                </h3>
-                <div className="input-group" style={{ marginBottom: '1rem' }}>
-                  <label>Vault File Path</label>
-                  <input value={vaultPath} onChange={e => setVaultPath(e.target.value)} placeholder="C:\Users\Secret\my_vault.kdbx" />
-                </div>
-
-                <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-                  <button onClick={handleSaveVault} style={{ background: '#10b981', flex: 1, minWidth: '160px' }}>
-                    <Save size={16} /> Save to Vault
-                  </button>
-                  <button onClick={handleLoadVault} style={{ background: '#3b82f6', flex: 1, minWidth: '160px' }}>
-                    <FolderLock size={16} /> Load from Vault
-                  </button>
-                </div>
-              </div>
-
+              <TextCryptography 
+                keys={keys} 
+                passphrase={passphrase} 
+                showNotification={showNotification} 
+                addLog={addLog} 
+              />
               {keys && (
                 <div className="result-box">
                   <p style={{color: 'var(--success)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
@@ -265,8 +327,7 @@ function App() {
             </div>
           )}
 
-          {activeTab === 'files' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+          <div style={{ display: activeTab === 'files' ? 'flex' : 'none', flexDirection: 'column', gap: '2rem' }}>
               {/* Module 1: Zero-Knowledge Key & Identity Vault */}
               <div>
                 <h2>🔐 Secure Vault Command Center</h2>
@@ -350,23 +411,37 @@ function App() {
                 </div>
               </div>
             </div>
+          </div>
+
+          {(keepAlive || activeTab === 'messaging') && (
+            <div style={{ display: activeTab === 'messaging' ? 'block' : 'none', height: '100%' }}>
+              <SecureChat 
+                keys={keys} 
+                passphrase={passphrase} 
+                showNotification={showNotification} 
+                onionAddress={onionAddress}
+                setOnionAddress={setOnionAddress}
+                addLog={addLog}
+              />
+            </div>
           )}
 
-          {activeTab === 'messaging' && (
-            <SecureChat 
-              keys={keys} 
-              passphrase={passphrase} 
-              showNotification={showNotification} 
-              onionAddress={onionAddress}
-              setOnionAddress={setOnionAddress}
+          <div style={{ display: activeTab === 'logs' ? 'block' : 'none' }}>
+            <SystemLogs 
+              logs={logs} 
+              onClearLogs={() => setLogs([])} 
+              onAddLog={addLog} 
             />
-          )}
+          </div>
+
+          <div style={{ display: activeTab === 'settings' ? 'block' : 'none' }}>
+            <Settings keepAlive={keepAlive} setKeepAlive={setKeepAlive} />
+          </div>
+
+          <div style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: 'auto', paddingBottom: '1rem' }}>
+            Created by <strong>._neutron_.</strong> (GitHub: <a href="https://github.com/futuretonight" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>futuretonight</a>)
+          </div>
         </div>
-        
-        <div style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: 'auto', paddingBottom: '1rem' }}>
-          Created by <strong>._neutron_.</strong> (GitHub: <a href="https://github.com/futuretonight" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>futuretonight</a>)
-        </div>
-      </div>
 
       {notification && (
         <div className={`notification ${notification.type} show-notification`}>

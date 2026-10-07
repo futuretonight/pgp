@@ -5,6 +5,8 @@ use sequoia_openpgp::serialize::SerializeInto;
 use std::path::Path;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+pub mod mesh_engine;
+
 pub struct PublicKey {
     pub bytes: Vec<u8>,
 }
@@ -164,6 +166,72 @@ impl sequoia_openpgp::parse::stream::VerificationHelper for DecryptHelper {
     fn check(&mut self, _structure: sequoia_openpgp::parse::stream::MessageStructure) -> sequoia_openpgp::Result<()> {
         Ok(())
     }
+}
+
+/// Encrypts an in-memory message using given recipients' public keys.
+pub fn encrypt_message(payload: &[u8], recipients_pubkeys: &[PublicKey]) -> Result<Vec<u8>> {
+    use sequoia_openpgp::serialize::stream::{Message, Encryptor, LiteralWriter};
+    use sequoia_openpgp::cert::Cert;
+    use sequoia_openpgp::parse::Parse;
+    use sequoia_openpgp::policy::StandardPolicy;
+
+    let p = &StandardPolicy::new();
+    let mut certs = Vec::new();
+    for pk in recipients_pubkeys {
+        certs.push(Cert::from_bytes(&pk.bytes)?);
+    }
+
+    let mut sink = Vec::new();
+    let message = Message::new(&mut sink);
+
+    let mut recipients = Vec::new();
+    for cert in &certs {
+        for ka in cert.keys().with_policy(p, None).supported().for_transport_encryption() {
+            recipients.push(ka.clone());
+        }
+    }
+
+    let message = Encryptor::for_recipients(message, recipients).build()?;
+    let mut writer = LiteralWriter::new(message).build()?;
+    std::io::copy(&mut std::io::Cursor::new(payload), &mut writer)?;
+    writer.finalize()?;
+
+    Ok(sink)
+}
+
+/// Decrypts an in-memory message using a private key.
+pub fn decrypt_message(payload: &[u8], private_key: &PrivateKey, passphrase: &str) -> Result<Vec<u8>> {
+    use sequoia_openpgp::parse::stream::DecryptorBuilder;
+    use sequoia_openpgp::cert::Cert;
+    use sequoia_openpgp::parse::Parse;
+    use sequoia_openpgp::policy::StandardPolicy;
+    use sequoia_openpgp::crypto::Password;
+
+    let p = &StandardPolicy::new();
+    let cert = Cert::from_bytes(&private_key.bytes)?;
+
+    let mut keypair = None;
+    for ka in cert.keys().with_policy(p, None).secret().supported().for_transport_encryption() {
+        let mut key = ka.key().clone();
+        if key.secret().is_encrypted() {
+            let key_ref = key.clone();
+            key.secret_mut().decrypt_in_place(&key_ref, &Password::from(passphrase)).map_err(|e| anyhow::anyhow!("Decryption failed: {}", e))?;
+        }
+        if let Ok(kp) = key.into_keypair() {
+            keypair = Some(kp);
+            break;
+        }
+    }
+
+    let keypair = keypair.ok_or_else(|| anyhow::anyhow!("No suitable decryption key found"))?;
+    let helper = DecryptHelper { keypair };
+
+    let mut decryptor = DecryptorBuilder::from_bytes(payload)?.with_policy(p, None, helper)?;
+
+    let mut out_sink = Vec::new();
+    std::io::copy(&mut decryptor, &mut out_sink)?;
+
+    Ok(out_sink)
 }
 
 /// Decrypts a file at `in_path` using a private key, writes plaintext to `out_path`.
