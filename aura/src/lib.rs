@@ -319,3 +319,102 @@ pub fn unlock_vault(kdbx_bytes: &[u8], passphrase: &str) -> Result<()> {
     Ok(())
 }
 
+use argon2::{
+    password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
+    Argon2,
+};
+use chacha20poly1305::{
+    aead::{Aead, KeyInit, Payload},
+    XChaCha20Poly1305, XNonce,
+};
+use rand::Rng;
+
+pub fn save_identity_to_vault(identity: &Identity, passphrase: &str, path: &Path) -> Result<()> {
+    // 1. Serialize the identity
+    let mut data = Vec::new();
+    data.extend_from_slice(&(identity.public_key.bytes.len() as u32).to_le_bytes());
+    data.extend_from_slice(&identity.public_key.bytes);
+    data.extend_from_slice(&(identity.private_key.bytes.len() as u32).to_le_bytes());
+    data.extend_from_slice(&identity.private_key.bytes);
+
+    // 2. Derive key using Argon2
+    let salt = SaltString::generate(&mut OsRng);
+    let argon2 = Argon2::default();
+    let password_hash = argon2.hash_password(passphrase.as_bytes(), &salt).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    
+    // Create a 32-byte key from the hash output (simple truncation/padding for this demo)
+    let hash_bytes = password_hash.hash.unwrap();
+    let mut key_bytes = [0u8; 32];
+    let copy_len = std::cmp::min(32, hash_bytes.len());
+    key_bytes[..copy_len].copy_from_slice(&hash_bytes.as_bytes()[..copy_len]);
+
+    // 3. Encrypt with XChaCha20Poly1305
+    let cipher = XChaCha20Poly1305::new(&key_bytes.into());
+    let mut nonce_bytes = [0u8; 24];
+    rand::thread_rng().fill(&mut nonce_bytes);
+    let nonce = XNonce::from(nonce_bytes);
+
+    let ciphertext = cipher.encrypt(&nonce, data.as_ref()).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+    // 4. Save to file (Salt + Nonce + Ciphertext)
+    let mut out_file = std::fs::File::create(path)?;
+    use std::io::Write;
+    let salt_bytes = salt.as_str().as_bytes();
+    out_file.write_all(&(salt_bytes.len() as u32).to_le_bytes())?;
+    out_file.write_all(salt_bytes)?;
+    out_file.write_all(&nonce_bytes)?;
+    out_file.write_all(&ciphertext)?;
+
+    Ok(())
+}
+
+pub fn load_identity_from_vault(passphrase: &str, path: &Path) -> Result<Identity> {
+    use std::io::Read;
+    let mut in_file = std::fs::File::open(path)?;
+    
+    let mut salt_len_bytes = [0u8; 4];
+    in_file.read_exact(&mut salt_len_bytes)?;
+    let salt_len = u32::from_le_bytes(salt_len_bytes) as usize;
+    
+    let mut salt_bytes = vec![0u8; salt_len];
+    in_file.read_exact(&mut salt_bytes)?;
+    let salt_str = std::str::from_utf8(&salt_bytes)?;
+    let salt = SaltString::new(salt_str).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+    let mut nonce_bytes = [0u8; 24];
+    in_file.read_exact(&mut nonce_bytes)?;
+
+    let mut ciphertext = Vec::new();
+    in_file.read_to_end(&mut ciphertext)?;
+
+    // Derive key using Argon2
+    let argon2 = Argon2::default();
+    let password_hash = argon2.hash_password(passphrase.as_bytes(), &salt).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    
+    let hash_bytes = password_hash.hash.unwrap();
+    let mut key_bytes = [0u8; 32];
+    let copy_len = std::cmp::min(32, hash_bytes.len());
+    key_bytes[..copy_len].copy_from_slice(&hash_bytes.as_bytes()[..copy_len]);
+
+    // Decrypt
+    let cipher = XChaCha20Poly1305::new(&key_bytes.into());
+    let nonce = XNonce::from(nonce_bytes);
+    let plaintext = cipher.decrypt(&nonce, ciphertext.as_ref()).map_err(|_| anyhow::anyhow!("Invalid passphrase or corrupt vault"))?;
+
+    // Parse identity
+    if plaintext.len() < 8 { anyhow::bail!("Corrupt vault data"); }
+    let pub_len = u32::from_le_bytes([plaintext[0], plaintext[1], plaintext[2], plaintext[3]]) as usize;
+    if plaintext.len() < 4 + pub_len + 4 { anyhow::bail!("Corrupt vault data"); }
+    let pub_bytes = plaintext[4..4+pub_len].to_vec();
+    
+    let priv_len_start = 4 + pub_len;
+    let priv_len = u32::from_le_bytes([plaintext[priv_len_start], plaintext[priv_len_start+1], plaintext[priv_len_start+2], plaintext[priv_len_start+3]]) as usize;
+    if plaintext.len() < priv_len_start + 4 + priv_len { anyhow::bail!("Corrupt vault data"); }
+    let priv_bytes = plaintext[priv_len_start+4 .. priv_len_start+4+priv_len].to_vec();
+
+    Ok(Identity {
+        public_key: PublicKey { bytes: pub_bytes },
+        private_key: PrivateKey { bytes: priv_bytes },
+    })
+}
+

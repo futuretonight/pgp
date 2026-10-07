@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Key, FileText, MessageSquare, Shield, CheckCircle, AlertCircle, Activity, Globe, Lock, Cpu, Server, Network } from 'lucide-react';
+import SecureChat from './components/SecureChat';
 
 const SecureFramebufferText = ({ text, style = {} }) => {
   const canvasRef = useRef(null);
@@ -42,6 +43,9 @@ function App() {
   const [keys, setKeys] = useState(null);
   const [message, setMessage] = useState('');
   const [signature, setSignature] = useState('');
+  
+  const [inFile, setInFile] = useState('');
+  const [outFile, setOutFile] = useState('');
 
   // Network State for Information Dense View
   const [dhtHash, setDhtHash] = useState('Resolving...');
@@ -92,6 +96,24 @@ function App() {
       setSignature(sigHex);
       showNotification('Message signed');
     } catch(e) { showNotification(e.toString(), 'error'); }
+  };
+
+  const handleEncryptFile = async () => {
+    try {
+      if (!keys?.pub) throw new Error("No public key active. Create identity first.");
+      const pubBytes = Array.from(keys.pub.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+      await invoke('encrypt_file', { inPath: inFile, outPath: outFile, pubKeyBytes: pubBytes });
+      showNotification('File encrypted securely');
+    } catch (e) { showNotification(e.toString(), 'error'); }
+  };
+
+  const handleDecryptFile = async () => {
+    try {
+      if (!keys?.priv) throw new Error("No private key active. Create identity first.");
+      const privBytes = Array.from(keys.priv.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+      await invoke('decrypt_file', { inPath: inFile, outPath: outFile, privKeyBytes: privBytes, passphrase });
+      showNotification('File decrypted successfully');
+    } catch (e) { showNotification(e.toString(), 'error'); }
   };
 
   return (
@@ -173,6 +195,28 @@ function App() {
                 </button>
               </div>
 
+              <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem', borderTop: '1px solid #333', paddingTop: '1rem' }}>
+                <button onClick={async () => {
+                  try {
+                    if (!keys?.pub || !keys?.priv) throw new Error("No keys to save.");
+                    const pubBytes = Array.from(keys.pub.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+                    const privBytes = Array.from(keys.priv.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+                    await invoke('save_vault', { pubKeyBytes: pubBytes, privKeyBytes: privBytes, passphrase, path: "my_vault.kdbx" });
+                    showNotification('Vault encrypted to disk (my_vault.kdbx)');
+                  } catch(e) { showNotification(e.toString(), 'error'); }
+                }} style={{ background: '#10b981' }}>Save to Vault</button>
+
+                <button onClick={async () => {
+                  try {
+                    const res = await invoke('load_vault', { passphrase, path: "my_vault.kdbx" });
+                    const pubHex = Array.from(new Uint8Array(res[0])).map(b => b.toString(16).padStart(2, '0')).join('');
+                    const privHex = Array.from(new Uint8Array(res[1])).map(b => b.toString(16).padStart(2, '0')).join('');
+                    setKeys({ pub: pubHex, priv: privHex });
+                    showNotification('Vault decrypted and loaded');
+                  } catch(e) { showNotification(e.toString(), 'error'); }
+                }} style={{ background: '#3b82f6' }}>Load from Vault</button>
+              </div>
+
               {keys && (
                 <div className="result-box">
                   <p style={{color: 'var(--success)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
@@ -194,38 +238,21 @@ function App() {
               <p className="subtitle">Securely encrypt and decrypt physical files to disk using AES-256-GCM.</p>
               <div className="input-group">
                 <label>Input File Path</label>
-                <input placeholder="C:\Users\Secret\document.pdf" />
+                <input value={inFile} onChange={e => setInFile(e.target.value)} placeholder="C:\Users\Secret\document.pdf" />
               </div>
               <div className="input-group">
                 <label>Output File Path</label>
-                <input placeholder="C:\Users\Secret\document.pdf.gpg" />
+                <input value={outFile} onChange={e => setOutFile(e.target.value)} placeholder="C:\Users\Secret\document.pdf.gpg" />
               </div>
               <div style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem' }}>
-                <button>Encrypt File</button>
-                <button style={{ background: 'transparent', border: '1px solid var(--accent)'}}>Decrypt File</button>
+                <button onClick={handleEncryptFile}>Encrypt File</button>
+                <button onClick={handleDecryptFile} style={{ background: 'transparent', border: '1px solid var(--accent)'}}>Decrypt File</button>
               </div>
             </div>
           )}
 
           {activeTab === 'messaging' && (
-            <div>
-              <h2>P2P Tor Messaging</h2>
-              <p className="subtitle">Sign and verify messages before they are broadcast across the DHT.</p>
-              
-              <div className="input-group">
-                <label>Message Payload</label>
-                <input value={message} onChange={e => setMessage(e.target.value)} placeholder="Type an encrypted message..." />
-              </div>
-              
-              <button onClick={handleSignMessage}>Sign Message Packet</button>
-
-              {signature && (
-                <div className="result-box">
-                  <p style={{color: 'var(--success)'}}>Detached Cryptographic Signature:</p>
-                  <SecureFramebufferText text={signature.substring(0, 64) + "..."} />
-                </div>
-              )}
-            </div>
+            <SecureChat keys={keys} passphrase={passphrase} showNotification={showNotification} />
           )}
         </div>
         

@@ -52,6 +52,26 @@ fn start_temporary_chat() -> Result<(Vec<u8>, Vec<u8>), String> {
     }
 }
 
+#[tauri::command]
+fn save_vault(pub_key_bytes: Vec<u8>, priv_key_bytes: Vec<u8>, passphrase: &str, path: String) -> Result<(), String> {
+    let identity = aura::Identity {
+        public_key: aura::PublicKey { bytes: pub_key_bytes },
+        private_key: aura::PrivateKey { bytes: priv_key_bytes },
+    };
+    match aura::save_identity_to_vault(&identity, passphrase, &PathBuf::from(path)) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+fn load_vault(passphrase: &str, path: String) -> Result<(Vec<u8>, Vec<u8>), String> {
+    match aura::load_identity_from_vault(passphrase, &PathBuf::from(path)) {
+        Ok(identity) => Ok((identity.public_key.bytes, identity.private_key.bytes)),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   aura::protect_process();
@@ -64,7 +84,9 @@ pub fn run() {
       decrypt_file,
       sign_message,
       verify_message,
-      start_temporary_chat
+      start_temporary_chat,
+      save_vault,
+      load_vault
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
