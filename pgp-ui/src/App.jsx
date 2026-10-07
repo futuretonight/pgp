@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Key, FileText, MessageSquare, Shield, CheckCircle, AlertCircle, Activity, Globe, Lock, Cpu, Server, Network } from 'lucide-react';
+import { Key, Database, MessageSquare, Shield, CheckCircle, AlertCircle, Activity, Globe, Lock, Unlock, Cpu, Server, Network, Save, FolderLock, FileText } from 'lucide-react';
 import SecureChat from './components/SecureChat';
 
 const SecureFramebufferText = ({ text, style = {} }) => {
@@ -39,6 +39,7 @@ function App() {
   const [notification, setNotification] = useState(null);
   
   const [passphrase, setPassphrase] = useState('');
+  const [vaultPath, setVaultPath] = useState('my_vault.kdbx');
   const [userId, setUserId] = useState('');
   const [keys, setKeys] = useState(null);
   const [message, setMessage] = useState('');
@@ -63,17 +64,18 @@ function App() {
   
   const showNotification = (msg, type = 'success') => {
     setNotification({ msg, type });
-    setTimeout(() => setNotification(null), 3000);
+    setTimeout(() => setNotification(null), 3500);
   };
 
   const handleCreateIdentity = async () => {
     try {
+      if (!passphrase) throw new Error("Please enter a Master Passphrase to secure your identity.");
       const res = await invoke('create_identity', { passphrase, userId });
       const pubHex = Array.from(new Uint8Array(res[0])).map(b => b.toString(16).padStart(2, '0')).join('');
       const privHex = Array.from(new Uint8Array(res[1])).map(b => b.toString(16).padStart(2, '0')).join('');
       setKeys({ pub: pubHex, priv: privHex });
-      showNotification('Identity created successfully');
-    } catch (e) { showNotification(e, 'error'); }
+      showNotification('Permanent node identity created successfully!');
+    } catch (e) { showNotification(e.toString(), 'error'); }
   };
 
   const handleTempChat = async () => {
@@ -82,37 +84,68 @@ function App() {
       const pubHex = Array.from(new Uint8Array(res[0])).map(b => b.toString(16).padStart(2, '0')).join('');
       const privHex = Array.from(new Uint8Array(res[1])).map(b => b.toString(16).padStart(2, '0')).join('');
       setKeys({ pub: pubHex, priv: privHex });
-      showNotification('Temporary ephemeral chat session started');
-    } catch (e) { showNotification(e, 'error'); }
+      showNotification('Temporary ephemeral session keys generated');
+    } catch (e) { showNotification(e.toString(), 'error'); }
+  };
+
+  const handleSaveVault = async () => {
+    try {
+      if (!keys?.pub || !keys?.priv) throw new Error("No active cryptographic keys to save. Generate or create an identity first.");
+      if (!passphrase) throw new Error("Master Passphrase is required to encrypt the vault.");
+      const targetPath = vaultPath.trim() || 'my_vault.kdbx';
+      const pubBytes = Array.from(keys.pub.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+      const privBytes = Array.from(keys.priv.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+      await invoke('save_vault', { pubKeyBytes: pubBytes, privKeyBytes: privBytes, passphrase, path: targetPath });
+      showNotification(`Vault encrypted and saved to ${targetPath}`, 'success');
+    } catch(e) {
+      showNotification(e.toString(), 'error');
+    }
+  };
+
+  const handleLoadVault = async () => {
+    try {
+      if (!passphrase) throw new Error("Master Passphrase is required to decrypt the vault.");
+      const targetPath = vaultPath.trim() || 'my_vault.kdbx';
+      const res = await invoke('load_vault', { passphrase, path: targetPath });
+      const pubHex = Array.from(new Uint8Array(res[0])).map(b => b.toString(16).padStart(2, '0')).join('');
+      const privHex = Array.from(new Uint8Array(res[1])).map(b => b.toString(16).padStart(2, '0')).join('');
+      setKeys({ pub: pubHex, priv: privHex });
+      showNotification(`Vault decrypted and loaded from ${targetPath}!`, 'success');
+    } catch(e) {
+      showNotification(e.toString(), 'error');
+    }
   };
 
   const handleSignMessage = async () => {
     try {
-      if (!keys?.priv) throw new Error("No private key active");
+      if (!keys?.priv) throw new Error("No private key active. Please generate or load an identity.");
       const privBytes = Array.from(keys.priv.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
       const msgBytes = Array.from(new TextEncoder().encode(message));
       const sig = await invoke('sign_message', { message: msgBytes, privKeyBytes: privBytes, passphrase });
       const sigHex = Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
       setSignature(sigHex);
-      showNotification('Message signed');
+      showNotification('Message signed successfully');
     } catch(e) { showNotification(e.toString(), 'error'); }
   };
 
   const handleEncryptFile = async () => {
     try {
-      if (!keys?.pub) throw new Error("No public key active. Create identity first.");
+      if (!keys?.pub) throw new Error("No public key active. Create or load an identity first.");
+      if (!inFile.trim() || !outFile.trim()) throw new Error("Please specify both Input and Output file paths.");
       const pubBytes = Array.from(keys.pub.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-      await invoke('encrypt_file', { inPath: inFile, outPath: outFile, pubKeyBytes: pubBytes });
-      showNotification('File encrypted securely');
+      await invoke('encrypt_file', { inPath: inFile.trim(), outPath: outFile.trim(), pubKeyBytes: pubBytes });
+      showNotification(`File encrypted successfully to ${outFile.trim()}`, 'success');
     } catch (e) { showNotification(e.toString(), 'error'); }
   };
 
   const handleDecryptFile = async () => {
     try {
-      if (!keys?.priv) throw new Error("No private key active. Create identity first.");
+      if (!keys?.priv) throw new Error("No private key active. Create or load an identity first.");
+      if (!passphrase) throw new Error("Master Passphrase is required to decrypt the file.");
+      if (!inFile.trim() || !outFile.trim()) throw new Error("Please specify both Input and Output file paths.");
       const privBytes = Array.from(keys.priv.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-      await invoke('decrypt_file', { inPath: inFile, outPath: outFile, privKeyBytes: privBytes, passphrase });
-      showNotification('File decrypted successfully');
+      await invoke('decrypt_file', { inPath: inFile.trim(), outPath: outFile.trim(), privKeyBytes: privBytes, passphrase });
+      showNotification(`File decrypted successfully to ${outFile.trim()}`, 'success');
     } catch (e) { showNotification(e.toString(), 'error'); }
   };
 
@@ -130,7 +163,7 @@ function App() {
           <Key size={18} /> Identity & Crypto
         </button>
         <button className={`nav-btn ${activeTab === 'files' ? 'active' : ''}`} onClick={() => setActiveTab('files')}>
-          <FileText size={18} /> Secure Vault
+          <Database size={18} /> Secure Vault
         </button>
         <button className={`nav-btn ${activeTab === 'messaging' ? 'active' : ''}`} onClick={() => setActiveTab('messaging')}>
           <MessageSquare size={18} /> P2P Network
@@ -176,8 +209,8 @@ function App() {
         <div className="glass-panel content-panel" key={activeTab}>
           {activeTab === 'identity' && (
             <div>
-              <h2>Identity Generation</h2>
-              <p className="subtitle" style={{marginBottom: '1rem'}}>Create a permanent identity or an ephemeral keypair mapped to your Tor hidden service.</p>
+              <h2>Identity Generation & Keyring</h2>
+              <p className="subtitle" style={{marginBottom: '1rem'}}>Create a permanent node identity or an ephemeral keypair mapped to your Tor hidden service.</p>
               
               <div className="input-group">
                 <label>User ID (Alias)</label>
@@ -185,36 +218,36 @@ function App() {
               </div>
               <div className="input-group">
                 <label>Master Passphrase</label>
-                <input type="password" value={passphrase} onChange={e => setPassphrase(e.target.value)} placeholder="Hardware-backed ChaCha20 encryption" />
+                <input type="password" value={passphrase} onChange={e => setPassphrase(e.target.value)} placeholder="Hardware-backed ChaCha20 / Argon2 encryption" />
               </div>
               
-              <div style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem' }}>
-                <button onClick={handleCreateIdentity}>Create Permanent Node Identity</button>
-                <button onClick={handleTempChat} style={{ background: 'transparent', border: '1px solid var(--accent)'}}>
+              <div style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem', flexWrap: 'wrap' }}>
+                <button onClick={handleCreateIdentity} style={{ flex: 1, minWidth: '200px' }}>
+                  <Key size={16} /> Create Permanent Node Identity
+                </button>
+                <button onClick={handleTempChat} style={{ flex: 1, minWidth: '200px', background: 'transparent', border: '1px solid var(--accent)'}}>
                   Generate Ephemeral Keys
                 </button>
               </div>
 
-              <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem', borderTop: '1px solid #333', paddingTop: '1rem' }}>
-                <button onClick={async () => {
-                  try {
-                    if (!keys?.pub || !keys?.priv) throw new Error("No keys to save.");
-                    const pubBytes = Array.from(keys.pub.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-                    const privBytes = Array.from(keys.priv.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-                    await invoke('save_vault', { pubKeyBytes: pubBytes, privKeyBytes: privBytes, passphrase, path: "my_vault.kdbx" });
-                    showNotification('Vault encrypted to disk (my_vault.kdbx)');
-                  } catch(e) { showNotification(e.toString(), 'error'); }
-                }} style={{ background: '#10b981' }}>Save to Vault</button>
+              {/* Vault Persistence Controls in Identity Tab */}
+              <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--panel-border)', paddingTop: '1.25rem' }}>
+                <h3 style={{ fontSize: '1.1rem', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-primary)' }}>
+                  <Database size={16} color="var(--accent)"/> Vault Storage (KDBX / Argon2)
+                </h3>
+                <div className="input-group" style={{ marginBottom: '1rem' }}>
+                  <label>Vault File Path</label>
+                  <input value={vaultPath} onChange={e => setVaultPath(e.target.value)} placeholder="C:\Users\Secret\my_vault.kdbx" />
+                </div>
 
-                <button onClick={async () => {
-                  try {
-                    const res = await invoke('load_vault', { passphrase, path: "my_vault.kdbx" });
-                    const pubHex = Array.from(new Uint8Array(res[0])).map(b => b.toString(16).padStart(2, '0')).join('');
-                    const privHex = Array.from(new Uint8Array(res[1])).map(b => b.toString(16).padStart(2, '0')).join('');
-                    setKeys({ pub: pubHex, priv: privHex });
-                    showNotification('Vault decrypted and loaded');
-                  } catch(e) { showNotification(e.toString(), 'error'); }
-                }} style={{ background: '#3b82f6' }}>Load from Vault</button>
+                <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                  <button onClick={handleSaveVault} style={{ background: '#10b981', flex: 1, minWidth: '160px' }}>
+                    <Save size={16} /> Save to Vault
+                  </button>
+                  <button onClick={handleLoadVault} style={{ background: '#3b82f6', flex: 1, minWidth: '160px' }}>
+                    <FolderLock size={16} /> Load from Vault
+                  </button>
+                </div>
               </div>
 
               {keys && (
@@ -233,26 +266,100 @@ function App() {
           )}
 
           {activeTab === 'files' && (
-            <div>
-              <h2>Zero-Knowledge File Vault</h2>
-              <p className="subtitle">Securely encrypt and decrypt physical files to disk using AES-256-GCM.</p>
-              <div className="input-group">
-                <label>Input File Path</label>
-                <input value={inFile} onChange={e => setInFile(e.target.value)} placeholder="C:\Users\Secret\document.pdf" />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+              {/* Module 1: Zero-Knowledge Key & Identity Vault */}
+              <div>
+                <h2>🔐 Secure Vault Command Center</h2>
+                <p className="subtitle" style={{marginBottom: '1rem'}}>Manage in-memory cryptographic identities and local encrypted KDBX vaults (Argon2 + XChaCha20Poly1305).</p>
+                
+                <div style={{ background: 'rgba(0, 0, 0, 0.25)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--panel-border)', marginBottom: '1.25rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                    <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <Lock size={14}/> Active Keyring Status:
+                    </span>
+                    <span style={{ 
+                      fontSize: '0.85rem', 
+                      fontFamily: 'monospace', 
+                      padding: '2px 8px', 
+                      borderRadius: '4px',
+                      background: keys?.pub ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                      color: keys?.pub ? 'var(--success)' : 'var(--error)',
+                      border: `1px solid ${keys?.pub ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`
+                    }}>
+                      {keys?.pub ? '● IDENTITY LOADED IN MEMORY' : '○ NO ACTIVE IDENTITY'}
+                    </span>
+                  </div>
+                  {keys?.pub && (
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
+                      Pubkey: {keys.pub.substring(0, 24)}... (Armor Verified)
+                    </div>
+                  )}
+                </div>
+
+                <div className="input-group">
+                  <label>Vault Passphrase</label>
+                  <input 
+                    type="password" 
+                    value={passphrase} 
+                    onChange={e => setPassphrase(e.target.value)} 
+                    placeholder="Master Passphrase for Argon2 derivation" 
+                  />
+                </div>
+
+                <div className="input-group">
+                  <label>Vault File Path (.kdbx / .vault)</label>
+                  <input 
+                    value={vaultPath} 
+                    onChange={e => setVaultPath(e.target.value)} 
+                    placeholder="C:\Users\Secret\my_vault.kdbx" 
+                  />
+                </div>
+
+                <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                  <button onClick={handleSaveVault} style={{ background: '#10b981', flex: 1, minWidth: '180px' }}>
+                    <Save size={16} /> Save Identity to Vault
+                  </button>
+                  <button onClick={handleLoadVault} style={{ background: '#3b82f6', flex: 1, minWidth: '180px' }}>
+                    <FolderLock size={16} /> Load / Unlock Vault
+                  </button>
+                </div>
               </div>
-              <div className="input-group">
-                <label>Output File Path</label>
-                <input value={outFile} onChange={e => setOutFile(e.target.value)} placeholder="C:\Users\Secret\document.pdf.gpg" />
-              </div>
-              <div style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem' }}>
-                <button onClick={handleEncryptFile}>Encrypt File</button>
-                <button onClick={handleDecryptFile} style={{ background: 'transparent', border: '1px solid var(--accent)'}}>Decrypt File</button>
+
+              {/* Module 2: Zero-Knowledge File Encryption */}
+              <div style={{ borderTop: '1px solid var(--panel-border)', paddingTop: '1.5rem' }}>
+                <h3 style={{ fontSize: '1.25rem', marginBottom: '0.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <FileText size={20} color="var(--accent)"/> Zero-Knowledge File Armor
+                </h3>
+                <p className="subtitle" style={{marginBottom: '1rem'}}>Directly encrypt and decrypt physical files to disk using AES-256-GCM / Sequoia OpenPGP stream cipher.</p>
+                
+                <div className="input-group">
+                  <label>Input File Path</label>
+                  <input value={inFile} onChange={e => setInFile(e.target.value)} placeholder="C:\Users\Secret\document.pdf" />
+                </div>
+                <div className="input-group">
+                  <label>Output File Path</label>
+                  <input value={outFile} onChange={e => setOutFile(e.target.value)} placeholder="C:\Users\Secret\document.pdf.gpg" />
+                </div>
+                <div style={{ display: 'flex', gap: '1rem', marginTop: '1.25rem', flexWrap: 'wrap' }}>
+                  <button onClick={handleEncryptFile} style={{ flex: 1, minWidth: '160px' }}>
+                    <Lock size={16} /> Encrypt File
+                  </button>
+                  <button onClick={handleDecryptFile} style={{ background: 'transparent', border: '1px solid var(--accent)', flex: 1, minWidth: '160px' }}>
+                    <Unlock size={16} /> Decrypt File
+                  </button>
+                </div>
               </div>
             </div>
           )}
 
           {activeTab === 'messaging' && (
-            <SecureChat keys={keys} passphrase={passphrase} showNotification={showNotification} />
+            <SecureChat 
+              keys={keys} 
+              passphrase={passphrase} 
+              showNotification={showNotification} 
+              onionAddress={onionAddress}
+              setOnionAddress={setOnionAddress}
+            />
           )}
         </div>
         
