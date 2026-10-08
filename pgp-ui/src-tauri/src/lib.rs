@@ -223,8 +223,9 @@ fn toggle_headless(app_handle: tauri::AppHandle, hide: bool) -> Result<(), Strin
     use tauri::Manager;
     if let Some(window) = app_handle.get_webview_window("main") {
         if hide {
-            window.hide().map_err(|e| e.to_string())?;
+            window.minimize().map_err(|e| e.to_string())?;
         } else {
+            window.unminimize().map_err(|e| e.to_string())?;
             window.show().map_err(|e| e.to_string())?;
         }
     }

@@ -15,15 +15,18 @@
         "title": "Hermes",
         "decorations": true,
         "transparent": false,
-        "width": 800,
-        "height": 600,
+        "width": 1100,
+        "height": 750,
         "resizable": true,
         "fullscreen": false,
-        "devtools": true
+        "devtools": true,
+        "visible": true,
+        "center": true,
+        "focus": true
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost"
     }
   },
   "bundle": {
