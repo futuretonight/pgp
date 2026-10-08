@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Hermes",
         "decorations": true,
         "transparent": false,
@@ -21,8 +22,7 @@
         "fullscreen": false,
         "devtools": true,
         "visible": true,
-        "center": true,
-        "focus": true
+        "center": true
       }
     ],
     "security": {

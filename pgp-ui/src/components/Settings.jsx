@@ -10,6 +10,8 @@ export default function Settings({ keepAlive, setKeepAlive }) {
   const [bridgeSource, setBridgeSource] = useState(() => localStorage.getItem('hermes_bridge_source') || 'builtin');
   const [bridgeString, setBridgeString] = useState(() => localStorage.getItem('hermes_bridge_string') || '');
   const [volunteerProxy, setVolunteerProxy] = useState(() => localStorage.getItem('hermes_volunteer') === 'true');
+  const [requestedBridges, setRequestedBridges] = useState(() => window.requestedBridges || '');
+  const [isRequestingBridges, setIsRequestingBridges] = useState(false);
 
   React.useEffect(() => {
     localStorage.setItem('hermes_algo', algo);
@@ -203,23 +205,29 @@ export default function Settings({ keepAlive, setKeepAlive }) {
                     <span style={{ color: bridgeSource === 'request' ? '#fff' : 'var(--text-secondary)', display: 'block', marginBottom: '0.75rem' }}>Request a bridge from torproject.org</span>
                     <textarea 
                       readOnly
-                      value={bridgeSource === 'request' ? (window.requestedBridges || "Click 'Request a New Bridge' to fetch...") : ""}
+                      value={bridgeSource === 'request' ? (requestedBridges || (isRequestingBridges ? "Fetching live circumvention bridges from Tor Moat API..." : "Click 'Request a New Bridge' to fetch...")) : ""}
                       disabled={bridgeSource !== 'request'}
                       style={{ width: '100%', minHeight: '60px', background: '#0d1117', border: '1px solid var(--panel-border)', color: 'var(--text-secondary)', padding: '10px', borderRadius: '4px', resize: 'none', fontSize: '0.8rem', fontFamily: 'monospace', marginBottom: '0.75rem' }}
                     />
                     <button 
-                      disabled={bridgeSource !== 'request'}
+                      disabled={bridgeSource !== 'request' || isRequestingBridges}
                       onClick={async () => {
                         try {
-                          const bridges = await import('@tauri-apps/api/core').then(m => m.invoke('request_bridges'));
+                          setIsRequestingBridges(true);
+                          const { invoke } = await import('@tauri-apps/api/core');
+                          const bridges = await invoke('request_bridges');
                           window.requestedBridges = bridges;
-                          setBridgeString(bridges); // Force re-render
+                          setRequestedBridges(bridges);
+                          setBridgeString(bridges);
                         } catch(e) {
                           console.error("Failed to fetch bridges", e);
+                          setRequestedBridges("Error fetching bridges: " + e.toString());
+                        } finally {
+                          setIsRequestingBridges(false);
                         }
                       }}
                       style={{ background: 'transparent', border: '1px solid var(--panel-border)', color: bridgeSource === 'request' ? '#fff' : 'var(--text-secondary)', padding: '6px 14px', borderRadius: '20px', fontSize: '0.85rem', cursor: bridgeSource === 'request' ? 'pointer' : 'default' }}>
-                      Request a New Bridge...
+                      {isRequestingBridges ? "Requesting live bridges..." : "Request a New Bridge..."}
                     </button>
                   </div>
                 </div>

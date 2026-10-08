@@ -163,8 +163,11 @@ struct TelemetryData {
 }
 
 async fn fetch_real_metrics() -> Result<(u32, u32), reqwest::Error> {
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .build()?;
     let start = std::time::Instant::now();
-    let resp = reqwest::get("https://onionoo.torproject.org/summary?limit=1").await?;
+    let resp = client.get("https://onionoo.torproject.org/summary?limit=1").send().await?;
     let ping = start.elapsed().as_millis() as u32;
     
     let json: serde_json::Value = resp.json().await?;
@@ -234,8 +237,12 @@ fn toggle_headless(app_handle: tauri::AppHandle, hide: bool) -> Result<(), Strin
 
 #[tauri::command]
 async fn request_bridges() -> Result<String, String> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .build()
+        .map_err(|e| e.to_string())?;
     let resp = client.post("https://bridges.torproject.org/moat/circumvention/defaults")
+        .header("Content-Type", "application/json")
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -279,6 +286,14 @@ pub fn run() {
   
   tauri::Builder::default()
     .plugin(tauri_plugin_log::Builder::new().build())
+    .setup(|app| {
+        use tauri::Manager;
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+        Ok(())
+    })
     .manage(AppState {
         tor_node: Mutex::new(None),
         start_time: std::time::Instant::now(),
