@@ -26,3 +26,9 @@ target/
 .gitsync_config.ini
 .gitsync_backups/
 .gitsync_templates/
+
+# Project planning and brief files
+task.md
+HACKATHON_BRIEF.md
+deep-research-report.md
+ARCHITECTURE.md
