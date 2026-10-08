@@ -5,6 +5,8 @@ import SecureChat from './components/SecureChat';
 import SystemLogs from './components/SystemLogs';
 import Settings from './components/Settings';
 import TextCryptography from './components/TextCryptography';
+import { applyTheme, loadTheme } from './themes';
+import { PREF_KEYS, readPref } from './prefs';
 
 const SecureFramebufferText = ({ text, style = {} }) => {
   const canvasRef = useRef(null);
@@ -22,7 +24,8 @@ const SecureFramebufferText = ({ text, style = {} }) => {
     const render = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       if (flip) {
-        ctx.fillStyle = '#10b981'; 
+        // Canvas can't resolve CSS variables; read the live themed colour.
+        ctx.fillStyle = getComputedStyle(canvas).getPropertyValue('--accent-ink').trim() || '#38d6ac';
         ctx.font = '14px monospace';
         ctx.fillText(text, 0, 14);
       }
@@ -37,10 +40,25 @@ const SecureFramebufferText = ({ text, style = {} }) => {
   return <canvas ref={canvasRef} style={{ ...style, opacity: 0.8 }} />;
 };
 
+// Audit logs can be copied to the clipboard or exported as a JSON file, so they
+// must never carry secrets. Scrub any secret currently held in memory, plus any
+// long hex run (key, signature or ciphertext material), before a log is stored.
+const HEX_BLOB = /[0-9a-f]{16,}/gi;
+const redactSecrets = (text, secrets) => {
+  let out = String(text ?? '');
+  for (const secret of secrets) {
+    if (secret) out = out.split(secret).join('[REDACTED]');
+  }
+  return out.replace(HEX_BLOB, '[REDACTED]');
+};
+
 function App() {
   const [activeTab, setActiveTab] = useState('identity');
   const [notification, setNotification] = useState(null);
   const [keepAlive, setKeepAlive] = useState(false); // Toggle for preserving chat state
+  const [theme, setTheme] = useState(loadTheme);
+
+  useEffect(() => { applyTheme(theme); }, [theme]);
   
   const [passphrase, setPassphrase] = useState('');
   const [vaultPath, setVaultPath] = useState('my_vault.kdbx');
@@ -86,6 +104,10 @@ function App() {
     }
   ]);
 
+  // Mirror the live secrets into a ref so the (stable) addLog can scrub them.
+  const secretsRef = useRef([]);
+  secretsRef.current = [passphrase, keys?.priv, keys?.pub];
+
   const addLog = useCallback((level, category, message, details = '') => {
     setLogs(prev => [
       ...prev,
@@ -94,8 +116,8 @@ function App() {
         timestamp: new Date().toLocaleTimeString(),
         level,
         category,
-        message,
-        details
+        message: redactSecrets(message, secretsRef.current),
+        details: redactSecrets(details, secretsRef.current)
       }
     ]);
   }, []);
@@ -107,6 +129,8 @@ function App() {
   const [globalNodes, setGlobalNodes] = useState(0);
   const [nodeStatus, setNodeStatus] = useState('Bootstrapping...');
 
+  // Real telemetry from the backend: node state, ping to the Tor metrics API,
+  // and the public relay + bridge count (refreshed there at most once a minute).
   useEffect(() => {
     const fetchTelemetry = async () => {
       try {
@@ -115,29 +139,32 @@ function App() {
         setGlobalNodes(data.nodes);
         setNodeStatus(data.status);
       } catch (err) {
-        console.error("Telemetry error:", err);
+        console.error('Telemetry error:', err);
       }
     };
-    const pinger = setInterval(fetchTelemetry, 2000);
     fetchTelemetry();
-    return () => { clearInterval(pinger); }
+    const pinger = setInterval(fetchTelemetry, 2000);
+    return () => { clearInterval(pinger); };
   }, []);
   
-  const showNotification = (msg, type = 'success') => {
+  // Memoized so its identity is stable: otherwise every render produces a new
+  // showNotification, which cascades into initializeTorNode changing and the
+  // mount effect re-calling start_tor_node in a loop (repeated Tor bootstraps).
+  const showNotification = useCallback((msg, type = 'success') => {
     setNotification({ msg, type });
     setTimeout(() => setNotification(null), 3500);
-  };
+  }, []);
 
   const handleCreateIdentity = async () => {
     try {
       if (!passphrase) throw new Error("Please enter a Master Passphrase to secure your identity.");
-      const algo = localStorage.getItem('hermes_algo') || 'ecc';
+      const algo = readPref(PREF_KEYS.algo, 'ecc');
       const res = await invoke('create_identity', { passphrase, userId, algo });
       const pubHex = Array.from(new Uint8Array(res[0])).map(b => b.toString(16).padStart(2, '0')).join('');
       const privHex = Array.from(new Uint8Array(res[1])).map(b => b.toString(16).padStart(2, '0')).join('');
       setKeys({ pub: pubHex, priv: privHex });
       showNotification('Permanent node identity created successfully!');
-      addLog('SUCCESS', 'CRYPTO', 'Permanent OpenPGP Node Identity generated', `Alias: ${userId || 'Anonymous'}, PubKey: ${pubHex.substring(0, 16)}...`);
+      addLog('SUCCESS', 'CRYPTO', 'Permanent OpenPGP Node Identity generated', `Alias: ${userId || 'Anonymous'}`);
       addLog('INFO', 'SECURITY', 'Private key buffered in XOR MaskedMemory & Zeroize container');
     } catch (e) { 
       showNotification(e.toString(), 'error');
@@ -152,7 +179,7 @@ function App() {
       const privHex = Array.from(new Uint8Array(res[1])).map(b => b.toString(16).padStart(2, '0')).join('');
       setKeys({ pub: pubHex, priv: privHex });
       showNotification('Temporary ephemeral session keys generated');
-      addLog('INFO', 'CRYPTO', 'Temporary ephemeral keypair generated (Memory-Only)', `Pub: ${pubHex.substring(0, 16)}...`);
+      addLog('INFO', 'CRYPTO', 'Temporary ephemeral keypair generated (Memory-Only)');
     } catch (e) { 
       showNotification(e.toString(), 'error'); 
       addLog('ERROR', 'CRYPTO', 'Failed to generate ephemeral keys', e.toString());
@@ -247,36 +274,40 @@ function App() {
           <SettingsIcon size={18} /> Settings
         </button>
 
-        <div style={{ marginTop: 'auto', padding: '1rem', background: 'rgba(0,0,0,0.3)', borderRadius: '8px', border: '1px solid var(--panel-border)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.25rem', fontWeight: 600, letterSpacing: '0.5px' }}>
+        <div style={{ margin: '1rem 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem', background: 'var(--inset)', borderRadius: '6px', border: '1px solid var(--panel-border)' }}>
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Chat Keep-Alive</span>
+          <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
+            <input 
+              type="checkbox" 
+              checked={keepAlive} 
+              onChange={e => setKeepAlive(e.target.checked)} 
+              style={{ accentColor: 'var(--accent)', width: '16px', height: '16px' }}
+            />
+          </label>
+        </div>
+
+        <div style={{ marginTop: 'auto', padding: '1rem', background: 'var(--inset-strong)', borderRadius: '8px', border: '1px solid var(--panel-border)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
               <Server size={14}/> SYSTEM STATUS
             </span>
-            <button 
-              title="Run in Headless Node Mode (Route traffic without UI)"
+            <button
+              title="Run in Headless Node Mode: hide the window and keep routing. Click the Dock icon to bring it back."
               onClick={async () => {
                 try {
                   await invoke('toggle_headless', { hide: true });
-                  showNotification('Node running in background', 'info');
-                } catch(e) {
+                  addLog('INFO', 'NETWORK', 'Window hidden: node running headless in the background');
+                } catch (e) {
                   showNotification('Headless mode failed: ' + e, 'error');
                 }
               }}
-              style={{ background: 'transparent', border: '1px solid var(--accent)', color: 'var(--accent)', fontSize: '0.6rem', padding: '2px 6px', borderRadius: '4px', cursor: 'pointer' }}>
+              style={{ background: 'transparent', border: '1px solid var(--accent)', color: 'var(--accent-ink)', fontSize: '0.65rem', padding: '2px 8px', borderRadius: '4px' }}>
               Run Node
             </button>
           </div>
-          <div>
-            <p style={{ fontSize: '0.85rem', color: nodeStatus === 'Bootstrapping...' ? 'var(--text-secondary)' : 'var(--success)', fontFamily: 'monospace', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
-              <span style={{ fontSize: '10px' }}>●</span> {nodeStatus}
-            </p>
-            <p style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontFamily: 'monospace', marginBottom: '4px' }}>
-              Ping: {ping > 0 ? ping + 'ms' : '--'}
-            </p>
-            <p style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontFamily: 'monospace' }}>
-              Global Nodes: {globalNodes > 0 ? globalNodes.toLocaleString() : '--'}
-            </p>
-          </div>
+          <p style={{ fontSize: '0.85rem', color: nodeStatus === 'Bootstrapping...' ? 'var(--text-secondary)' : 'var(--success)', fontFamily: 'monospace' }}>● {nodeStatus}</p>
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontFamily: 'monospace' }}>Ping: {ping > 0 ? `${ping}ms` : '--'}</p>
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontFamily: 'monospace' }}>Global Nodes: {globalNodes > 0 ? globalNodes.toLocaleString() : '--'}</p>
         </div>
       </div>
 
@@ -308,9 +339,9 @@ function App() {
         </div>
 
         {/* Dynamic Panels */}
-        {(activeTab === 'identity' || activeTab === 'files') && (
-          <div className="glass-panel content-panel" key={activeTab}>
-            {activeTab === 'identity' && (
+        <div className="glass-panel content-panel" key={activeTab}
+          style={{ display: (activeTab === 'identity' || activeTab === 'files') ? 'block' : 'none' }}>
+          {activeTab === 'identity' && (
             <div>
               <h2>Identity Generation & Keyring</h2>
               <p className="subtitle" style={{marginBottom: '1rem'}}>Create a permanent node identity or an ephemeral keypair mapped to your Tor hidden service.</p>
@@ -328,7 +359,7 @@ function App() {
                 <button onClick={handleCreateIdentity} style={{ flex: 1, minWidth: '200px' }}>
                   <Key size={16} /> Create Permanent Node Identity
                 </button>
-                <button onClick={handleTempChat} style={{ flex: 1, minWidth: '200px', background: 'transparent', border: '1px solid var(--accent)'}}>
+                <button onClick={handleTempChat} style={{ flex: 1, minWidth: '200px', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--accent)'}}>
                   Generate Ephemeral Keys
                 </button>
               </div>
@@ -360,7 +391,7 @@ function App() {
                 <h2>🔐 Secure Vault Command Center</h2>
                 <p className="subtitle" style={{marginBottom: '1rem'}}>Manage in-memory cryptographic identities and local encrypted KDBX vaults (Argon2 + XChaCha20Poly1305).</p>
                 
-                <div style={{ background: 'rgba(0, 0, 0, 0.25)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--panel-border)', marginBottom: '1.25rem' }}>
+                <div style={{ background: 'var(--inset)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--panel-border)', marginBottom: '1.25rem' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
                     <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                       <Lock size={14}/> Active Keyring Status:
@@ -370,9 +401,9 @@ function App() {
                       fontFamily: 'monospace', 
                       padding: '2px 8px', 
                       borderRadius: '4px',
-                      background: keys?.pub ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                      background: keys?.pub ? 'var(--success-wash)' : 'var(--error-wash)',
                       color: keys?.pub ? 'var(--success)' : 'var(--error)',
-                      border: `1px solid ${keys?.pub ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`
+                      border: `1px solid ${keys?.pub ? 'var(--success-line)' : 'var(--error-line)'}`
                     }}>
                       {keys?.pub ? '● IDENTITY LOADED IN MEMORY' : '○ NO ACTIVE IDENTITY'}
                     </span>
@@ -404,10 +435,10 @@ function App() {
                 </div>
 
                 <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-                  <button onClick={handleSaveVault} style={{ background: '#10b981', flex: 1, minWidth: '180px' }}>
+                  <button onClick={handleSaveVault} style={{ background: 'var(--accent)', flex: 1, minWidth: '180px' }}>
                     <Save size={16} /> Save Identity to Vault
                   </button>
-                  <button onClick={handleLoadVault} style={{ background: '#3b82f6', flex: 1, minWidth: '180px' }}>
+                  <button onClick={handleLoadVault} style={{ background: 'var(--accent)', flex: 1, minWidth: '180px' }}>
                     <FolderLock size={16} /> Load / Unlock Vault
                   </button>
                 </div>
@@ -432,16 +463,15 @@ function App() {
                   <button onClick={handleEncryptFile} style={{ flex: 1, minWidth: '160px' }}>
                     <Lock size={16} /> Encrypt File
                   </button>
-                  <button onClick={handleDecryptFile} style={{ background: 'transparent', border: '1px solid var(--accent)', flex: 1, minWidth: '160px' }}>
+                  <button onClick={handleDecryptFile} style={{ background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--accent)', flex: 1, minWidth: '160px' }}>
                     <Unlock size={16} /> Decrypt File
                   </button>
                 </div>
               </div>
             </div>
           </div>
-        )}
 
-        {(keepAlive || activeTab === 'messaging') && (
+          {(keepAlive || activeTab === 'messaging') && (
             <div style={{ display: activeTab === 'messaging' ? 'block' : 'none', height: '100%' }}>
               <SecureChat 
                 keys={keys} 
@@ -463,7 +493,7 @@ function App() {
           </div>
 
           <div style={{ display: activeTab === 'settings' ? 'block' : 'none' }}>
-            <Settings keepAlive={keepAlive} setKeepAlive={setKeepAlive} />
+            <Settings keepAlive={keepAlive} setKeepAlive={setKeepAlive} theme={theme} setTheme={setTheme} />
           </div>
 
           <div style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: 'auto', paddingBottom: '1rem' }}>

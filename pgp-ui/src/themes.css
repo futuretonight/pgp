@@ -1,0 +1,269 @@
+/* ============================================================================
+   Alternative themes — every look Hermes has shipped, selectable in Settings.
+   Each block overrides the same tokens defined on :root in index.css (the
+   default "Obsidian Verdigris" theme). The active theme is set as
+   <html data-theme="..."> by src/themes.js; ids must match THEMES there.
+   ========================================================================== */
+
+/* Patina Blueprint — brighter verdigris on obsidian, bronze glow, blueprint grid */
+:root[data-theme="patina"] {
+  color-scheme: dark;
+
+  --bg-color:      #0b0e0d;
+  --surface:       #111514;
+  --panel-bg:      #111514;
+  --surface-2:     #192120;
+  --surface-3:     #243130;
+  --panel-border:  #243230;
+  --line:          #243230;
+  --line-strong:   #37504b;
+
+  --text-primary:   #e8ece8;
+  --text-secondary: #94a39c;
+  --text-faint:     #5a6a64;
+
+  --accent:       #35c29c;
+  --accent-hover: #4fd8b2;
+  --accent-ink:   #4fd8b2;
+  --accent-wash:  rgba(53, 194, 156, 0.13);
+  --accent-line:  rgba(53, 194, 156, 0.28);
+  --on-accent:    #04110d;   /* the bright verdigris needs dark text to stay legible */
+
+  --success: #35c29c;
+  --warn:    #d79a4a;
+  --error:   #e2663f;
+  --bronze:  #c79a5b;
+  --success-wash: rgba(53, 194, 156, 0.13);
+  --success-line: rgba(53, 194, 156, 0.3);
+  --error-wash:   rgba(226, 102, 63, 0.14);
+  --error-line:   rgba(226, 102, 63, 0.3);
+
+  --inset:        rgba(0, 0, 0, 0.25);
+  --inset-strong: rgba(0, 0, 0, 0.35);
+  --tint-faint:   rgba(255, 255, 255, 0.015);
+  --tint:         rgba(255, 255, 255, 0.05);
+  --tint-strong:  rgba(255, 255, 255, 0.08);
+
+  --radius-lg: 16px;
+  --radius-md: 11px;
+  --radius-sm: 9px;
+  --shadow-md: 0 12px 30px rgba(0, 0, 0, 0.45);
+  --shadow-inset: inset 0 2px 8px rgba(0, 0, 0, 0.6);
+
+  --bg-image:
+    radial-gradient(at 18% -8%, rgba(53, 194, 156, 0.10) 0, transparent 46%),
+    radial-gradient(at 92% 4%, rgba(199, 154, 91, 0.05) 0, transparent 44%),
+    linear-gradient(rgba(53, 194, 156, 0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(53, 194, 156, 0.028) 1px, transparent 1px);
+  --bg-size: auto, auto, 36px 36px, 36px 36px;
+}
+
+/* Warm Charcoal — Claude-style dark: charcoal surfaces, clay/coral accent */
+:root[data-theme="charcoal"] {
+  color-scheme: dark;
+
+  --bg-color:      #1f1d1b;
+  --surface:       #292623;
+  --panel-bg:      #292623;
+  --surface-2:     #332f2b;
+  --surface-3:     #3d3833;
+  --panel-border:  #3a352f;
+  --line:          #3a352f;
+  --line-strong:   #4a443c;
+
+  --text-primary:   #f3efe7;
+  --text-secondary: #b7b0a3;
+  --text-faint:     #847d70;
+
+  --accent:       #d2765a;
+  --accent-hover: #e0906f;
+  --accent-ink:   #e0906f;
+  --accent-wash:  rgba(210, 118, 90, 0.16);
+  --accent-line:  rgba(210, 118, 90, 0.32);
+  --on-accent:    #ffffff;
+
+  --success: #6cc08b;
+  --warn:    #e0b05c;
+  --error:   #e2605a;
+  --bronze:  #c79a5b;
+  --success-wash: rgba(108, 192, 139, 0.15);
+  --success-line: rgba(108, 192, 139, 0.3);
+  --error-wash:   rgba(226, 96, 90, 0.15);
+  --error-line:   rgba(226, 96, 90, 0.3);
+
+  --inset:        rgba(0, 0, 0, 0.18);
+  --inset-strong: rgba(0, 0, 0, 0.26);
+  --tint-faint:   rgba(255, 255, 255, 0.015);
+  --tint:         rgba(255, 255, 255, 0.05);
+  --tint-strong:  rgba(255, 255, 255, 0.08);
+
+  --radius-lg: 16px;
+  --radius-md: 11px;
+  --radius-sm: 9px;
+  --shadow-md: 0 10px 28px rgba(0, 0, 0, 0.35);
+  --shadow-inset: inset 0 2px 8px rgba(0, 0, 0, 0.4);
+
+  --bg-image:
+    radial-gradient(at 15% -5%, rgba(210, 118, 90, 0.10) 0, transparent 45%),
+    radial-gradient(at 100% 0%, rgba(108, 192, 139, 0.05) 0, transparent 42%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.025'/%3E%3C/svg%3E");
+  --bg-size: auto;
+}
+
+/* Cyber Blue — the original Hermes look: midnight navy, electric blue, Inter */
+:root[data-theme="cyber-blue"] {
+  color-scheme: dark;
+
+  --bg-color:      #0b0f19;
+  --surface:       #121826;
+  --panel-bg:      rgba(255, 255, 255, 0.03);
+  --surface-2:     #151c2c;
+  --surface-3:     #1d2638;
+  --panel-border:  rgba(255, 255, 255, 0.08);
+  --line:          rgba(255, 255, 255, 0.08);
+  --line-strong:   rgba(255, 255, 255, 0.14);
+
+  --text-primary:   #ffffff;
+  --text-secondary: #94a3b8;
+  --text-faint:     #64748b;
+
+  --accent:       #3b82f6;
+  --accent-hover: #2563eb;
+  --accent-ink:   #60a5fa;
+  --accent-wash:  rgba(59, 130, 246, 0.15);
+  --accent-line:  rgba(59, 130, 246, 0.3);
+  --on-accent:    #ffffff;
+
+  --success: #10b981;
+  --warn:    #f59e0b;
+  --error:   #ef4444;
+  --bronze:  #8b5cf6;
+  --success-wash: rgba(16, 185, 129, 0.15);
+  --success-line: rgba(16, 185, 129, 0.3);
+  --error-wash:   rgba(239, 68, 68, 0.15);
+  --error-line:   rgba(239, 68, 68, 0.3);
+
+  --inset:        rgba(0, 0, 0, 0.22);
+  --inset-strong: rgba(0, 0, 0, 0.32);
+  --tint-faint:   rgba(255, 255, 255, 0.015);
+  --tint:         rgba(255, 255, 255, 0.05);
+  --tint-strong:  rgba(255, 255, 255, 0.08);
+
+  --font-serif: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-sans:  "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+
+  --radius-lg: 16px;
+  --radius-md: 10px;
+  --radius-sm: 8px;
+  --shadow-md: 0 8px 32px rgba(0, 0, 0, 0.3);
+  --shadow-inset: inset 0 2px 8px rgba(0, 0, 0, 0.6);
+
+  --bg-image:
+    radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.15) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(139, 92, 246, 0.15) 0px, transparent 50%);
+  --bg-size: auto;
+}
+
+/* Cream & Evergreen — warm paper surfaces, deep evergreen accent (light) */
+:root[data-theme="cream"] {
+  color-scheme: light;
+
+  --bg-color:      #f3eee2;
+  --surface:       #fcfaf4;
+  --panel-bg:      #fcfaf4;
+  --surface-2:     #efe8d8;
+  --surface-3:     #e7dfcc;
+  --panel-border:  #e3dac7;
+  --line:          #e3dac7;
+  --line-strong:   #d6ccb4;
+
+  --text-primary:   #272319;
+  --text-secondary: #6c6454;
+  --text-faint:     #9a9076;
+
+  --accent:       #1f6f5c;
+  --accent-hover: #164f41;
+  --accent-ink:   #164f41;
+  --accent-wash:  #e4ede6;
+  --accent-line:  rgba(31, 111, 92, 0.3);
+  --on-accent:    #ffffff;
+
+  --success: #2e7d5b;
+  --warn:    #a86b1f;
+  --error:   #a8402b;
+  --bronze:  #9a7440;
+  --success-wash: rgba(46, 125, 91, 0.12);
+  --success-line: rgba(46, 125, 91, 0.3);
+  --error-wash:   #f3e3dd;
+  --error-line:   rgba(168, 64, 43, 0.35);
+
+  --inset:        rgba(60, 48, 24, 0.04);
+  --inset-strong: rgba(60, 48, 24, 0.07);
+  --tint-faint:   rgba(60, 48, 24, 0.02);
+  --tint:         rgba(60, 48, 24, 0.045);
+  --tint-strong:  rgba(60, 48, 24, 0.08);
+
+  --radius-lg: 16px;
+  --radius-md: 10px;
+  --radius-sm: 8px;
+  --shadow-md: 0 6px 20px rgba(60, 48, 24, 0.08);
+  --shadow-inset: inset 0 1px 4px rgba(60, 48, 24, 0.08);
+
+  --bg-image:
+    radial-gradient(at 0% 0%, rgba(31, 111, 92, 0.05) 0, transparent 45%),
+    radial-gradient(at 100% 0%, rgba(168, 64, 43, 0.04) 0, transparent 40%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+  --bg-size: auto;
+}
+
+/* Parchment & Plum — bone/parchment surfaces, deep plum accent (light) */
+:root[data-theme="parchment"] {
+  color-scheme: light;
+
+  --bg-color:      #f1ede5;
+  --surface:       #faf8f2;
+  --panel-bg:      #faf8f2;
+  --surface-2:     #eae4d7;
+  --surface-3:     #e2dbcb;
+  --panel-border:  #e4dece;
+  --line:          #e4dece;
+  --line-strong:   #d6ccb9;
+
+  --text-primary:   #2a2621;
+  --text-secondary: #6e675b;
+  --text-faint:     #9b9284;
+
+  --accent:       #6d3f74;
+  --accent-hover: #512f58;
+  --accent-ink:   #512f58;
+  --accent-wash:  #ece3ef;
+  --accent-line:  rgba(109, 63, 116, 0.3);
+  --on-accent:    #ffffff;
+
+  --success: #3f8f6a;
+  --warn:    #a86b1f;
+  --error:   #b04a30;
+  --bronze:  #9a7440;
+  --success-wash: #e4ede7;
+  --success-line: rgba(63, 143, 106, 0.32);
+  --error-wash:   #f4e4dd;
+  --error-line:   rgba(176, 74, 48, 0.35);
+
+  --inset:        rgba(60, 46, 40, 0.04);
+  --inset-strong: rgba(60, 46, 40, 0.07);
+  --tint-faint:   rgba(60, 46, 40, 0.02);
+  --tint:         rgba(60, 46, 40, 0.045);
+  --tint-strong:  rgba(60, 46, 40, 0.08);
+
+  --radius-lg: 16px;
+  --radius-md: 11px;
+  --radius-sm: 9px;
+  --shadow-md: 0 8px 24px rgba(60, 46, 40, 0.08);
+  --shadow-inset: inset 0 1px 4px rgba(60, 46, 40, 0.08);
+
+  --bg-image:
+    radial-gradient(at 12% 0%, rgba(109, 63, 116, 0.06) 0, transparent 42%),
+    radial-gradient(at 100% 8%, rgba(63, 143, 106, 0.05) 0, transparent 40%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+  --bg-size: auto;
+}
