@@ -8,6 +8,8 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
+    "sidecars": "node scripts/fetch-sidecars.mjs",
+    "pretauri": "node scripts/fetch-sidecars.mjs",
     "tauri": "tauri"
   },
   "dependencies": {
