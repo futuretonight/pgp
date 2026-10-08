@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
-use tokio::net::TcpListener;
+
 
 pub struct TorMeshNode {
     pub client: Arc<TorClient<PreferredRuntime>>,
@@ -60,31 +60,39 @@ impl TorMeshNode {
             .build()
             .map_err(|e| anyhow::anyhow!("Config build failed: {}", e))?;
             
-        let (mut req_stream, onion_svc) = self.client.launch_onion_service(svc_config)
-            .map_err(|e| anyhow::anyhow!("Onion launch error: {}", e))?;
+        let (onion_svc, mut req_stream) = self.client.launch_onion_service(svc_config)
+            .map_err(|e| anyhow::anyhow!("Onion launch error: {}", e))?
+            .ok_or_else(|| anyhow::anyhow!("Onion service launch returned None"))?;
         
         // Retrieve the real onion address
         let onion_id = onion_svc.onion_name().ok_or_else(|| anyhow::anyhow!("No onion name generated"))?;
-        *lock = Some(format!("{}.onion", onion_id));
+        *lock = Some(format!("{:?}", onion_id));
         
         let tx = self.incoming_tx.clone();
         
         // Listen for actual Tor incoming rendezvous requests
         tokio::spawn(async move {
-            use futures::StreamExt;
+            use libp2p::futures::StreamExt;
             while let Some(req) = req_stream.next().await {
                 let tx_clone = tx.clone();
                 tokio::spawn(async move {
-                    if let Ok(mut stream) = req.accept().await {
-                        let mut len_buf = [0u8; 4];
-                        if stream.read_exact(&mut len_buf).await.is_ok() {
-                            let len = u32::from_le_bytes(len_buf) as usize;
-                            if len < 10 * 1024 * 1024 { // max 10MB payload
-                                let mut payload = vec![0u8; len];
-                                if stream.read_exact(&mut payload).await.is_ok() {
-                                    let _ = tx_clone.send(payload).await;
+                    if let Ok(mut stream_requests) = req.accept().await {
+                        while let Some(stream_req) = stream_requests.next().await {
+                            let tx_inner = tx_clone.clone();
+                            tokio::spawn(async move {
+                                if let Ok(mut stream) = stream_req.accept(tor_cell::relaycell::msg::Connected::new_empty()).await {
+                                    let mut len_buf = [0u8; 4];
+                                    if stream.read_exact(&mut len_buf).await.is_ok() {
+                                        let len = u32::from_le_bytes(len_buf) as usize;
+                                        if len < 10 * 1024 * 1024 { // max 10MB payload
+                                            let mut payload = vec![0u8; len];
+                                            if stream.read_exact(&mut payload).await.is_ok() {
+                                                let _ = tx_inner.send(payload).await;
+                                            }
+                                        }
+                                    }
                                 }
-                            }
+                            });
                         }
                     }
                 });

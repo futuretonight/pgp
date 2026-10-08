@@ -481,6 +481,7 @@ dependencies = [
  "sequoia-openpgp",
  "serde",
  "tokio",
+ "tor-cell",
  "tor-hsservice",
  "tor-rtcompat",
  "windows-sys 0.61.2",

@@ -90,7 +90,7 @@ pub fn create_identity(passphrase: &str, user_id: &str, algo: &str) -> Result<Id
     use sequoia_openpgp::cert::prelude::CipherSuite;
     let suite = match algo {
         "rsa" => CipherSuite::RSA4k,
-        "nist" => CipherSuite::NIST_P384,
+        "nist" => CipherSuite::P384,
         _ => CipherSuite::Cv25519,
     };
     

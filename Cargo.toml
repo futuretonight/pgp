@@ -8,7 +8,7 @@ resolver = "2"
 [workspace.dependencies]
 anyhow = "1.0.103"
 argon2 = "0.6.0"
-arti-client = { version = "0.47.0", features = ["pt-client", "onion-service-service"] }
+arti-client = { version = "0.47.0", features = ["pt-client", "onion-service-service", "onion-service-client", "experimental-api"] }
 chacha20poly1305 = "0.11.0"
 hex = "0.4.3"
 keepass = "=0.13.10"
@@ -24,6 +24,7 @@ tauri = "2.9.5"
 tauri-build = "2.5.3"
 tauri-plugin-log = "2"
 tokio = { version = "1.53.2", features = ["full"] }
+tor-cell = "0.47.0"
 tor-hsservice = "0.47.0"
 tor-rtcompat = "0.47.0"
 windows-sys = { version = "0.61.2", features = ["Win32_System_Diagnostics_Debug", "Win32_System_Threading"] }

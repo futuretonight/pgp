@@ -17,6 +17,7 @@ rusqlite = { workspace = true }
 sequoia-openpgp = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true }
+tor-cell = { workspace = true }
 tor-hsservice = { workspace = true }
 tor-rtcompat = { workspace = true }
 windows-sys = { workspace = true }
