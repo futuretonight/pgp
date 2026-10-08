@@ -3,6 +3,34 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { Globe, RefreshCw, Send, ShieldCheck, ShieldAlert, Check, Copy, Wifi, WifiOff, Link2, Key, Lock, AlertCircle, Image as ImageIcon } from 'lucide-react';
 import './SecureChat.css';
+import { PREF_KEYS, readPref, writePref, splitBridgeLines } from '../prefs';
+
+// Bridge lines for this Tor start, from the source chosen in Settings.
+async function resolveBridgeLines() {
+  const source = readPref(PREF_KEYS.bridgeSource, 'builtin');
+  if (source === 'provide') {
+    const lines = splitBridgeLines(readPref(PREF_KEYS.bridgeString, ''));
+    if (!lines.length) throw new Error('Bridges are on but no bridge lines were provided in Settings.');
+    return lines;
+  }
+  if (source === 'request') {
+    const lines = splitBridgeLines(readPref(PREF_KEYS.requestedBridges, ''));
+    if (!lines.length) throw new Error("Bridges are on but none were requested yet. Use 'Request a New Bridge' in Settings.");
+    return lines;
+  }
+  // Built-in: Tor Project's default bridges of the chosen type, cached for offline starts.
+  const type = readPref(PREF_KEYS.bridgeType, 'obfs4');
+  const cacheKey = `hermes_builtin_bridges_${type}`;
+  try {
+    const fetched = await invoke('request_bridges', { transport: type });
+    writePref(cacheKey, fetched);
+    return splitBridgeLines(fetched);
+  } catch (e) {
+    const cached = splitBridgeLines(readPref(cacheKey, ''));
+    if (cached.length) return cached;
+    throw new Error(`Could not fetch built-in ${type} bridges (${e}). Paste bridges from bridges.torproject.org under 'Provide a bridge'.`);
+  }
+}
 
 export default function SecureChat({ keys, passphrase, showNotification, onionAddress, setOnionAddress }) {
   const [myId, setMyId] = useState(onionAddress || 'Generating Onion Address...');
@@ -27,8 +55,10 @@ export default function SecureChat({ keys, passphrase, showNotification, onionAd
   const initializeTorNode = useCallback(async () => {
     setConnectionStatus('Bootstrapping Tor Circuit...');
     try {
-      // Invoke the Tauri command to start Arti and generate the Hidden Service
-      const realOnion = await invoke('start_tor_node');
+      const useBridges = readPref(PREF_KEYS.useBridges, 'false') === 'true';
+      const bridgeLines = useBridges ? await resolveBridgeLines() : [];
+      // Invoke the Tauri command to start Arti and launch our onion service
+      const realOnion = await invoke('start_tor_node', { useBridges, bridgeLines });
       setMyId(realOnion);
       if (setOnionAddress) setOnionAddress(realOnion);
       setConnectionStatus('Tor Node Online (Deep Anonymity)');
@@ -130,13 +160,18 @@ export default function SecureChat({ keys, passphrase, showNotification, onionAd
       showNotification('Please enter a valid Tor .onion address.', 'error');
       return;
     }
-    setConnectionStatus(`Resolving DHT for ${friendId}...`);
-    // Placeholder for libp2p Tor connection logic
-    setTimeout(() => {
+    setConnectionStatus(`Building Tor circuit to ${friendId}...`);
+    try {
+      // Opens a real stream to the peer's onion service to prove it is reachable.
+      await invoke('connect_peer', { targetOnion: friendId });
       setConn(true);
       setConnectionStatus('Tor Circuit Established (E2EE Active)');
-      showNotification(`Secure Tor Channel Established!`, 'success');
-    }, 2000);
+      showNotification('Secure Tor Channel Established!', 'success');
+    } catch (e) {
+      setConn(false);
+      setConnectionStatus('Tor Node Online');
+      showNotification(`Failed to connect: ${e}`, 'error');
+    }
   };
 
   const handleDisconnect = () => {
@@ -254,55 +289,57 @@ export default function SecureChat({ keys, passphrase, showNotification, onionAd
   return (
     <div className="chat-layout" style={{ minHeight: '560px', display: 'flex', flexDirection: 'column', borderRadius: '12px', overflow: 'hidden', border: '1px solid var(--panel-border)' }}>
       
-      {/* Top Header */}
-      <div style={{ padding: '1rem', background: 'var(--inset-strong)', borderBottom: '1px solid var(--panel-border)', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          
-          {/* Your Tor Onion */}
-          <div style={{ flex: 1, minWidth: '280px' }}>
-            <div style={{ fontSize: '11px', color: 'var(--success)', display: 'flex', alignItems: 'center', marginBottom: '4px', gap: '4px' }}>
-              <Globe size={13}/> Your Local Tor Node Service:
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--surface-2)', padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--panel-border)' }}>
-              <div style={{ fontFamily: 'monospace', color: 'var(--text-primary)', fontSize: '13px', flex: 1 }}>
-                {myId}
-              </div>
-              <button onClick={() => copyToClipboard(myId)} style={{ background: 'var(--tint-strong)', border: 'none', color: 'var(--text-primary)', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}>
-                {copied ? <Check size={13} color="var(--success)"/> : <Copy size={13}/>}
-              </button>
-            </div>
-          </div>
+      {/* Top Header: our address, then the peer connect row. Each is full width so a
+          56-character v3 onion address always fits (it wraps inside its box). */}
+      <div style={{ padding: '1rem 1.25rem', background: 'var(--inset-strong)', borderBottom: '1px solid var(--panel-border)', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
 
-          {/* Connect to Friend */}
-          <div style={{ flex: 1, minWidth: '280px' }}>
-            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <Link2 size={13} color="var(--accent)"/> Connect to Peer via Tor Onion Link:
+        {/* Your Tor Onion */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', minWidth: 0 }}>
+          <div style={{ fontSize: '11px', color: 'var(--success)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <Globe size={13}/> Your Local Tor Node Service:
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', background: 'var(--surface-2)', padding: '8px 8px 8px 12px', borderRadius: '6px', border: '1px solid var(--panel-border)', minWidth: 0 }}>
+            <div title={myId} style={{ flex: 1, minWidth: 0, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', fontSize: '13px', lineHeight: 1.5, wordBreak: 'break-all', overflowWrap: 'anywhere' }}>
+              {myId}
             </div>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <input 
-                value={friendId} 
-                onChange={e => setFriendId(e.target.value)} 
-                placeholder="xyz...onion" 
-                disabled={conn}
-                style={{ flex: 1, background: 'var(--surface-2)', border: '1px solid var(--panel-border)', color: 'var(--text-primary)', padding: '6px 10px', borderRadius: '6px', fontSize: '12px' }}
-              />
-              <input 
-                value={friendPubKey} 
-                onChange={e => setFriendPubKey(e.target.value)} 
-                placeholder="Friend's PGP PubKey (Hex)" 
-                disabled={conn}
-                style={{ flex: 1, background: 'var(--surface-2)', border: '1px solid var(--panel-border)', color: 'var(--text-primary)', padding: '6px 10px', borderRadius: '6px', fontSize: '12px' }}
-              />
-              {conn ? (
-                <button onClick={handleDisconnect} style={{ padding: '6px 14px', background: 'var(--error)', color: 'var(--on-accent)', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <WifiOff size={13}/> Disconnect
-                </button>
-              ) : (
-                <button onClick={connectToFriend} style={{ padding: '6px 14px', background: 'var(--accent)', color: 'var(--on-accent)', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <Wifi size={13}/> Connect
-                </button>
-              )}
-            </div>
+            <button onClick={() => copyToClipboard(myId)} title="Copy onion address" style={{ flex: 'none', background: 'var(--tint-strong)', border: 'none', color: 'var(--text-primary)', padding: '5px 10px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', fontWeight: 500 }}>
+              {copied ? <Check size={13} color="var(--success)"/> : <Copy size={13}/>}
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+        </div>
+
+        {/* Connect to Friend */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', minWidth: 0 }}>
+          <div style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <Link2 size={13} color="var(--accent)"/> Connect to Peer via Tor Onion Link:
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <input
+              value={friendId}
+              onChange={e => setFriendId(e.target.value.trim())}
+              placeholder="Peer's address (…xyz.onion)"
+              disabled={conn}
+              spellCheck={false}
+              style={{ flex: '2 1 280px', minWidth: 0, background: 'var(--surface-2)', border: '1px solid var(--panel-border)', color: 'var(--text-primary)', padding: '8px 10px', borderRadius: '6px', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
+            />
+            <input
+              value={friendPubKey}
+              onChange={e => setFriendPubKey(e.target.value)}
+              placeholder="Friend's PGP PubKey (Hex)"
+              disabled={conn}
+              spellCheck={false}
+              style={{ flex: '1 1 200px', minWidth: 0, background: 'var(--surface-2)', border: '1px solid var(--panel-border)', color: 'var(--text-primary)', padding: '8px 10px', borderRadius: '6px', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
+            />
+            {conn ? (
+              <button onClick={handleDisconnect} style={{ flex: 'none', padding: '8px 16px', background: 'var(--error)', color: 'var(--on-accent)', border: 'none', borderRadius: '6px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <WifiOff size={13}/> Disconnect
+              </button>
+            ) : (
+              <button onClick={connectToFriend} style={{ flex: 'none', padding: '8px 16px', background: 'var(--accent)', color: 'var(--on-accent)', border: 'none', borderRadius: '6px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Wifi size={13}/> Connect
+              </button>
+            )}
           </div>
         </div>
       </div>

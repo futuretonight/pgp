@@ -6,6 +6,7 @@ import SystemLogs from './components/SystemLogs';
 import Settings from './components/Settings';
 import TextCryptography from './components/TextCryptography';
 import { applyTheme, loadTheme } from './themes';
+import { PREF_KEYS, readPref } from './prefs';
 
 const SecureFramebufferText = ({ text, style = {} }) => {
   const canvasRef = useRef(null);
@@ -125,11 +126,26 @@ function App() {
   const [dhtHash, setDhtHash] = useState('Resolving...');
   const [onionAddress, setOnionAddress] = useState('Routing...');
   const [ping, setPing] = useState(0);
+  const [globalNodes, setGlobalNodes] = useState(0);
+  const [nodeStatus, setNodeStatus] = useState('Bootstrapping...');
 
+  // Real telemetry from the backend: node state, ping to the Tor metrics API,
+  // and the public relay + bridge count (refreshed there at most once a minute).
   useEffect(() => {
-    const pinger = setInterval(() => setPing(Math.floor(Math.random() * 50) + 20), 2000);
-    return () => { clearInterval(pinger); }
-  }, [addLog]);
+    const fetchTelemetry = async () => {
+      try {
+        const data = await invoke('get_telemetry');
+        setPing(data.ping);
+        setGlobalNodes(data.nodes);
+        setNodeStatus(data.status);
+      } catch (err) {
+        console.error('Telemetry error:', err);
+      }
+    };
+    fetchTelemetry();
+    const pinger = setInterval(fetchTelemetry, 2000);
+    return () => { clearInterval(pinger); };
+  }, []);
   
   // Memoized so its identity is stable: otherwise every render produces a new
   // showNotification, which cascades into initializeTorNode changing and the
@@ -142,7 +158,8 @@ function App() {
   const handleCreateIdentity = async () => {
     try {
       if (!passphrase) throw new Error("Please enter a Master Passphrase to secure your identity.");
-      const res = await invoke('create_identity', { passphrase, userId });
+      const algo = readPref(PREF_KEYS.algo, 'ecc');
+      const res = await invoke('create_identity', { passphrase, userId, algo });
       const pubHex = Array.from(new Uint8Array(res[0])).map(b => b.toString(16).padStart(2, '0')).join('');
       const privHex = Array.from(new Uint8Array(res[1])).map(b => b.toString(16).padStart(2, '0')).join('');
       setKeys({ pub: pubHex, priv: privHex });
@@ -269,12 +286,28 @@ function App() {
           </label>
         </div>
 
-        <div style={{ marginTop: 'auto', padding: '1rem', background: 'var(--inset-strong)', borderRadius: '8px', border: '1px solid var(--panel-border)' }}>
-          <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-            <Server size={14}/> SYSTEM STATUS
-          </p>
-          <p style={{ fontSize: '0.85rem', color: 'var(--success)', fontFamily: 'monospace' }}>● Node Online</p>
-          <p style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontFamily: 'monospace' }}>Ping: {ping}ms</p>
+        <div style={{ marginTop: 'auto', padding: '1rem', background: 'var(--inset-strong)', borderRadius: '8px', border: '1px solid var(--panel-border)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+              <Server size={14}/> SYSTEM STATUS
+            </span>
+            <button
+              title="Run in Headless Node Mode: hide the window and keep routing. Click the Dock icon to bring it back."
+              onClick={async () => {
+                try {
+                  await invoke('toggle_headless', { hide: true });
+                  addLog('INFO', 'NETWORK', 'Window hidden: node running headless in the background');
+                } catch (e) {
+                  showNotification('Headless mode failed: ' + e, 'error');
+                }
+              }}
+              style={{ background: 'transparent', border: '1px solid var(--accent)', color: 'var(--accent-ink)', fontSize: '0.65rem', padding: '2px 8px', borderRadius: '4px' }}>
+              Run Node
+            </button>
+          </div>
+          <p style={{ fontSize: '0.85rem', color: nodeStatus === 'Bootstrapping...' ? 'var(--text-secondary)' : 'var(--success)', fontFamily: 'monospace' }}>● {nodeStatus}</p>
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontFamily: 'monospace' }}>Ping: {ping > 0 ? `${ping}ms` : '--'}</p>
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontFamily: 'monospace' }}>Global Nodes: {globalNodes > 0 ? globalNodes.toLocaleString() : '--'}</p>
         </div>
       </div>
 
