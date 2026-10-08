@@ -217,8 +217,9 @@ fn toggle_headless(app_handle: tauri::AppHandle, hide: bool) -> Result<(), Strin
     use tauri::Manager;
     if let Some(window) = app_handle.get_webview_window("main") {
         if hide {
-            window.hide().map_err(|e| e.to_string())?;
+            window.minimize().map_err(|e| e.to_string())?;
         } else {
+            window.unminimize().map_err(|e| e.to_string())?;
             window.show().map_err(|e| e.to_string())?;
             window.set_focus().map_err(|e| e.to_string())?;
         }
@@ -232,6 +233,7 @@ fn toggle_headless(app_handle: tauri::AppHandle, hide: bool) -> Result<(), Strin
 async fn request_bridges(transport: Option<String>) -> Result<String, String> {
     let resp = reqwest::Client::new()
         .post("https://bridges.torproject.org/moat/circumvention/defaults")
+        .header("Content-Type", "application/json")
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -273,6 +275,14 @@ pub fn run() {
   
   tauri::Builder::default()
     .plugin(tauri_plugin_log::Builder::new().build())
+    .setup(|app| {
+        use tauri::Manager;
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+        Ok(())
+    })
     .manage(AppState {
         tor_node: Mutex::new(None),
         tor_start: Mutex::new(()),

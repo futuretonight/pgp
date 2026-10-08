@@ -12,11 +12,14 @@ def print_success(msg):
 def print_error(msg):
     print(f"\033[1;31m[-] {msg}\033[0m")
 
-def check_command(cmd, name, install_url):
+def check_command(cmd, name, install_url, reason=None):
     print_step(f"Checking for {name}...")
     if shutil.which(cmd) is None:
         print_error(f"{name} is not installed or not in PATH.")
-        print(f"Please install it from: {install_url}")
+        if reason:
+            print(f"    \033[1;33mWhy it's needed:\033[0m {reason}")
+        print(f"    \033[1;33mAction:\033[0m Please install it from {install_url}")
+        print(f"    \033[1;31mIMPORTANT:\033[0m Make sure to add it to your system PATH during installation!")
         sys.exit(1)
     print_success(f"{name} found.")
 
@@ -29,6 +32,16 @@ def main():
     check_command("node", "Node.js", "https://nodejs.org/")
     check_command("npm", "NPM", "https://nodejs.org/")
     check_command("cargo", "Rust / Cargo", "https://rustup.rs/")
+    
+    # NASM is explicitly required on Windows for building the 'ring' crate, 
+    # which is a core cryptography dependency for arti (Tor) and rustls.
+    if sys.platform == "win32":
+        check_command(
+            "nasm", 
+            "NASM (Netwide Assembler)", 
+            "https://www.nasm.us/",
+            reason="Required to compile the 'ring' cryptography library used by Tor and libp2p network components."
+        )
 
     # 2. Install NPM dependencies
     print_step("Installing frontend dependencies...")

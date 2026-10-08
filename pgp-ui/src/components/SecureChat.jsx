@@ -355,10 +355,19 @@ export default function SecureChat({ keys, passphrase, showNotification, onionAd
             </span>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            <span style={{ fontSize: '11px', fontFamily: 'monospace', padding: '3px 8px', borderRadius: '4px', background: conn ? 'var(--success-wash)' : 'var(--tint)', color: conn ? 'var(--success)' : 'var(--text-secondary)', border: `1px solid ${conn ? 'var(--success-line)' : 'var(--panel-border)'}`}}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <span style={{ fontSize: '11px', fontFamily: 'monospace', padding: '3px 8px', borderRadius: '4px', background: conn ? 'var(--success-wash)' : (connectionStatus.includes('Error') ? 'var(--error-wash)' : 'var(--tint)'), color: conn ? 'var(--success)' : (connectionStatus.includes('Error') ? 'var(--error)' : 'var(--text-secondary)'), border: `1px solid ${conn ? 'var(--success-line)' : (connectionStatus.includes('Error') ? 'var(--error-line)' : 'var(--panel-border)')}`}}>
               ● {connectionStatus}
             </span>
+            {connectionStatus.includes('Error') && (
+              <button 
+                onClick={initializeTorNode}
+                style={{ background: 'var(--tint)', border: '1px solid var(--panel-border)', color: 'var(--text-primary)', padding: '3px 8px', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}
+                title="Retry Tor connection"
+              >
+                <RefreshCw size={11} /> Retry
+              </button>
+            )}
             <span style={{ fontSize: '11px', color: keys?.pub ? 'var(--success)' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
               <Key size={12}/> {keys?.pub ? 'PGP Signing Active' : 'Unsigned Mode'}
             </span>
