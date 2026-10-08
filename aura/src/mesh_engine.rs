@@ -18,6 +18,7 @@ pub struct TorMeshNode {
 impl TorMeshNode {
     pub async fn new(use_bridges: bool, bridge_lines: Vec<String>) -> Result<Self> {
         let mut builder = TorClientConfig::builder();
+        let mut has_bridges = false;
         
         if use_bridges && !bridge_lines.is_empty() {
             let mut bridge_config = Vec::new();
@@ -27,11 +28,36 @@ impl TorMeshNode {
                     bridge_config.push(bridge);
                 }
             }
-            builder.bridges().set_bridges(bridge_config);
+            if !bridge_config.is_empty() {
+                builder.bridges().set_bridges(bridge_config);
+                has_bridges = true;
+            }
         }
         
-        let config = builder.build()?;
-        let client = TorClient::create_bootstrapped(config).await?;
+        let config = match builder.build() {
+            Ok(c) => c,
+            Err(e) => {
+                if has_bridges {
+                    eprintln!("[Hermes Tor] Bridge config error (missing pluggable transport): {}. Falling back to direct Tor.", e);
+                    TorClientConfig::builder().build()?
+                } else {
+                    return Err(e.into());
+                }
+            }
+        };
+
+        let client = match TorClient::create_bootstrapped(config.clone()).await {
+            Ok(c) => c,
+            Err(e) => {
+                if has_bridges {
+                    eprintln!("[Hermes Tor] Bridge bootstrap failed: {}. Retrying with direct Tor circuit...", e);
+                    let direct_config = TorClientConfig::builder().build()?;
+                    TorClient::create_bootstrapped(direct_config).await?
+                } else {
+                    return Err(e.into());
+                }
+            }
+        };
         
         let (tx, rx) = mpsc::channel(100);
         

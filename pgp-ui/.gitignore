@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+.gitsync_cache.log
+.gitsync_config.ini
+.gitsync_backups/
+.gitsync_templates/

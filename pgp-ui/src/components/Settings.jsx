@@ -10,7 +10,7 @@ export default function Settings({ keepAlive, setKeepAlive }) {
   const [bridgeSource, setBridgeSource] = useState(() => localStorage.getItem('hermes_bridge_source') || 'builtin');
   const [bridgeString, setBridgeString] = useState(() => localStorage.getItem('hermes_bridge_string') || '');
   const [volunteerProxy, setVolunteerProxy] = useState(() => localStorage.getItem('hermes_volunteer') === 'true');
-  const [requestedBridges, setRequestedBridges] = useState(() => window.requestedBridges || '');
+  const [requestedBridges, setRequestedBridges] = useState(() => localStorage.getItem('hermes_requested_bridges') || window.requestedBridges || '');
   const [isRequestingBridges, setIsRequestingBridges] = useState(false);
 
   React.useEffect(() => {
@@ -22,7 +22,10 @@ export default function Settings({ keepAlive, setKeepAlive }) {
     localStorage.setItem('hermes_bridge_source', bridgeSource);
     localStorage.setItem('hermes_bridge_string', bridgeString);
     localStorage.setItem('hermes_volunteer', volunteerProxy);
-  }, [algo, cipher, v3Only, useBridges, bridgeType, bridgeSource, bridgeString, volunteerProxy]);
+    if (requestedBridges) {
+      localStorage.setItem('hermes_requested_bridges', requestedBridges);
+    }
+  }, [algo, cipher, v3Only, useBridges, bridgeType, bridgeSource, bridgeString, volunteerProxy, requestedBridges]);
 
   return (
     <div className="panel" style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
@@ -193,32 +196,36 @@ export default function Settings({ keepAlive, setKeepAlive }) {
                 <hr style={{ border: 'none', borderTop: '1px solid rgba(255,255,255,0.05)', margin: '0' }}/>
 
                 {/* Option 2: Request */}
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '1rem' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '1rem' }} onClick={() => setBridgeSource('request')}>
                   <input 
                     type="radio" 
                     name="bridgeSource"
                     checked={bridgeSource === 'request'} 
                     onChange={() => setBridgeSource('request')} 
-                    style={{ marginTop: '0.25rem', accentColor: 'var(--accent)' }} 
+                    style={{ marginTop: '0.25rem', accentColor: 'var(--accent)', cursor: 'pointer' }} 
                   />
                   <div style={{ flex: 1 }}>
-                    <span style={{ color: bridgeSource === 'request' ? '#fff' : 'var(--text-secondary)', display: 'block', marginBottom: '0.75rem' }}>Request a bridge from torproject.org</span>
+                    <span style={{ color: bridgeSource === 'request' ? '#fff' : 'var(--text-secondary)', display: 'block', marginBottom: '0.75rem', cursor: 'pointer' }}>Request a bridge from torproject.org</span>
                     <textarea 
                       readOnly
-                      value={bridgeSource === 'request' ? (requestedBridges || (isRequestingBridges ? "Fetching live circumvention bridges from Tor Moat API..." : "Click 'Request a New Bridge' to fetch...")) : ""}
-                      disabled={bridgeSource !== 'request'}
-                      style={{ width: '100%', minHeight: '60px', background: '#0d1117', border: '1px solid var(--panel-border)', color: 'var(--text-secondary)', padding: '10px', borderRadius: '4px', resize: 'none', fontSize: '0.8rem', fontFamily: 'monospace', marginBottom: '0.75rem' }}
+                      value={requestedBridges || (isRequestingBridges ? "Fetching live circumvention bridges from Tor Moat API..." : "Click 'Request a New Bridge' to fetch...")}
+                      style={{ width: '100%', minHeight: '60px', background: '#0d1117', border: '1px solid var(--panel-border)', color: bridgeSource === 'request' ? '#fff' : 'var(--text-secondary)', padding: '10px', borderRadius: '4px', resize: 'none', fontSize: '0.8rem', fontFamily: 'monospace', marginBottom: '0.75rem' }}
                     />
                     <button 
-                      disabled={bridgeSource !== 'request' || isRequestingBridges}
-                      onClick={async () => {
+                      type="button"
+                      disabled={isRequestingBridges}
+                      onClick={async (e) => {
+                        e.stopPropagation();
                         try {
                           setIsRequestingBridges(true);
+                          setBridgeSource('request');
                           const { invoke } = await import('@tauri-apps/api/core');
                           const bridges = await invoke('request_bridges');
                           window.requestedBridges = bridges;
                           setRequestedBridges(bridges);
                           setBridgeString(bridges);
+                          localStorage.setItem('hermes_requested_bridges', bridges);
+                          localStorage.setItem('hermes_bridge_source', 'request');
                         } catch(e) {
                           console.error("Failed to fetch bridges", e);
                           setRequestedBridges("Error fetching bridges: " + e.toString());
@@ -226,7 +233,7 @@ export default function Settings({ keepAlive, setKeepAlive }) {
                           setIsRequestingBridges(false);
                         }
                       }}
-                      style={{ background: 'transparent', border: '1px solid var(--panel-border)', color: bridgeSource === 'request' ? '#fff' : 'var(--text-secondary)', padding: '6px 14px', borderRadius: '20px', fontSize: '0.85rem', cursor: bridgeSource === 'request' ? 'pointer' : 'default' }}>
+                      style={{ background: isRequestingBridges ? 'rgba(255,255,255,0.05)' : 'var(--accent)', border: 'none', color: '#fff', padding: '6px 14px', borderRadius: '20px', fontSize: '0.85rem', cursor: isRequestingBridges ? 'not-allowed' : 'pointer', fontWeight: '500' }}>
                       {isRequestingBridges ? "Requesting live bridges..." : "Request a New Bridge..."}
                     </button>
                   </div>

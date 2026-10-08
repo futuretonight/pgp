@@ -41,7 +41,7 @@ export default function SecureChat({ keys, passphrase, showNotification, onionAd
       } else if (bridgeSource === 'provide' && customString.trim()) {
         bridgeLines = customString.split('\n').filter(l => l.trim().length > 0);
       } else if (bridgeSource === 'request') {
-        const requested = window.requestedBridges;
+        const requested = localStorage.getItem('hermes_requested_bridges') || window.requestedBridges;
         if (requested) {
             bridgeLines = requested.split('\n').filter(l => l.trim().length > 0);
         } else {
@@ -338,10 +338,19 @@ export default function SecureChat({ keys, passphrase, showNotification, onionAd
             </span>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            <span style={{ fontSize: '11px', fontFamily: 'monospace', padding: '3px 8px', borderRadius: '4px', background: conn ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255, 255, 255, 0.05)', color: conn ? 'var(--success)' : 'var(--text-secondary)', border: `1px solid ${conn ? 'rgba(16, 185, 129, 0.3)' : 'var(--panel-border)'}`}}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <span style={{ fontSize: '11px', fontFamily: 'monospace', padding: '3px 8px', borderRadius: '4px', background: conn ? 'rgba(16, 185, 129, 0.15)' : (connectionStatus.includes('Error') ? 'rgba(239, 68, 68, 0.15)' : 'rgba(255, 255, 255, 0.05)'), color: conn ? 'var(--success)' : (connectionStatus.includes('Error') ? 'var(--error)' : 'var(--text-secondary)'), border: `1px solid ${conn ? 'rgba(16, 185, 129, 0.3)' : (connectionStatus.includes('Error') ? 'rgba(239, 68, 68, 0.3)' : 'var(--panel-border)')}`}}>
               ● {connectionStatus}
             </span>
+            {connectionStatus.includes('Error') && (
+              <button 
+                onClick={initializeTorNode}
+                style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid var(--panel-border)', color: '#fff', padding: '3px 8px', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}
+                title="Retry Tor connection"
+              >
+                <RefreshCw size={11} /> Retry
+              </button>
+            )}
             <span style={{ fontSize: '11px', color: keys?.pub ? 'var(--success)' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
               <Key size={12}/> {keys?.pub ? 'PGP Signing Active' : 'Unsigned Mode'}
             </span>
