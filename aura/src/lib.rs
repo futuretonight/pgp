@@ -84,19 +84,11 @@ pub struct Identity {
 
 /// Creates a new OpenPGP identity (Ed25519/X25519)
 /// Returns a new Identity struct containing the private and public keys.
-pub fn create_identity(passphrase: &str, user_id: &str, algo: &str) -> Result<Identity> {
+pub fn create_identity(passphrase: &str, user_id: &str) -> Result<Identity> {
     let password = Password::from(passphrase);
-    
-    use sequoia_openpgp::cert::prelude::CipherSuite;
-    let suite = match algo {
-        "rsa" => CipherSuite::RSA4k,
-        "nist" => CipherSuite::P384,
-        _ => CipherSuite::Cv25519,
-    };
     
     let (cert, _) = CertBuilder::new()
         .add_userid(user_id)
-        .set_cipher_suite(suite)
         .add_signing_subkey()
         .add_transport_encryption_subkey()
         .set_password(Some(password))

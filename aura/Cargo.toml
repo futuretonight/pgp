@@ -4,21 +4,26 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-anyhow = { workspace = true }
-argon2 = { workspace = true }
-arti-client = { workspace = true }
-chacha20poly1305 = { workspace = true }
-futures.workspace = true
-hex = { workspace = true }
-keepass = { workspace = true }
-libp2p = { workspace = true }
-rand = { workspace = true }
-rusqlite = { workspace = true }
-sequoia-openpgp = { workspace = true }
-serde = { workspace = true }
-tokio = { workspace = true }
-tor-cell = { workspace = true }
-tor-hsservice = { workspace = true }
-tor-rtcompat = { workspace = true }
-windows-sys = { workspace = true }
-zeroize = { workspace = true }
+anyhow = "1.0.103"
+argon2 = "0.6.0"
+arti-client = "0.47.0"
+chacha20poly1305 = "0.11.0"
+hex = "0.4.3"
+keepass = "0.13.10"
+libp2p = { version = "0.57.0", features = ["tokio", "macros", "kad", "ping", "identify", "noise", "yamux"] }
+rand = "0.8.5"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+tokio = { version = "1.53.2", features = ["full"] }
+tor-hsservice = "0.47.0"
+tor-rtcompat = "0.47.0"
+zeroize = { version = "1.9.0", features = ["derive"] }
+
+# Sequoia needs exactly one crypto backend. Windows CNG only builds on Windows,
+# so other platforms use OpenSSL (also production-ready and constant-time).
+[target.'cfg(windows)'.dependencies]
+sequoia-openpgp = { version = "2.3.0", default-features = false, features = ["crypto-cng"] }
+windows-sys = { version = "0.61.2", features = ["Win32_System_Diagnostics_Debug", "Win32_System_Threading"] }
+
+[target.'cfg(not(windows))'.dependencies]
+sequoia-openpgp = { version = "2.3.0", default-features = false, features = ["crypto-openssl"] }

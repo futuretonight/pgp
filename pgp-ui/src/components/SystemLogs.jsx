@@ -69,7 +69,7 @@ export default function SystemLogs({ logs = [], onClearLogs, onAddLog }) {
     switch (level) {
       case 'SUCCESS': return 'var(--success)';
       case 'ERROR': return 'var(--error)';
-      case 'WARN': return '#f59e0b';
+      case 'WARN': return 'var(--warn)';
       case 'INFO':
       default:
         return 'var(--accent)';
@@ -80,7 +80,7 @@ export default function SystemLogs({ logs = [], onClearLogs, onAddLog }) {
     switch (level) {
       case 'SUCCESS': return <CheckCircle size={13} color="var(--success)"/>;
       case 'ERROR': return <AlertCircle size={13} color="var(--error)"/>;
-      case 'WARN': return <AlertTriangle size={13} color="#f59e0b"/>;
+      case 'WARN': return <AlertTriangle size={13} color="var(--warn)"/>;
       case 'INFO':
       default:
         return <Info size={13} color="var(--accent)"/>;
@@ -89,11 +89,11 @@ export default function SystemLogs({ logs = [], onClearLogs, onAddLog }) {
 
   const getCategoryColor = (cat) => {
     switch (cat) {
-      case 'CRYPTO': return '#8b5cf6';
-      case 'VAULT': return '#10b981';
-      case 'NETWORK': return '#3b82f6';
-      case 'SECURITY': return '#ec4899';
-      default: return '#94a3b8';
+      case 'CRYPTO': return 'var(--accent)';
+      case 'VAULT': return 'var(--accent)';
+      case 'NETWORK': return 'var(--accent)';
+      case 'SECURITY': return 'var(--accent)';
+      default: return 'var(--text-secondary)';
     }
   };
 
@@ -115,7 +115,7 @@ export default function SystemLogs({ logs = [], onClearLogs, onAddLog }) {
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
             <button 
               onClick={handleCopyLogs}
-              style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid var(--panel-border)', padding: '6px 12px', fontSize: '12px' }}
+              style={{ background: 'var(--tint)', color: 'var(--text-primary)', border: '1px solid var(--panel-border)', padding: '6px 12px', fontSize: '12px' }}
               title="Copy all logs to clipboard"
             >
               {copied ? <Check size={14} color="var(--success)"/> : <Copy size={14}/>}
@@ -124,7 +124,7 @@ export default function SystemLogs({ logs = [], onClearLogs, onAddLog }) {
 
             <button 
               onClick={handleExportLogs}
-              style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid var(--panel-border)', padding: '6px 12px', fontSize: '12px' }}
+              style={{ background: 'var(--tint)', color: 'var(--text-primary)', border: '1px solid var(--panel-border)', padding: '6px 12px', fontSize: '12px' }}
               title="Export logs as JSON file"
             >
               <Download size={14}/> Export
@@ -132,7 +132,7 @@ export default function SystemLogs({ logs = [], onClearLogs, onAddLog }) {
 
             <button 
               onClick={onClearLogs}
-              style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: 'var(--error)', padding: '6px 12px', fontSize: '12px' }}
+              style={{ background: 'var(--error-wash)', border: '1px solid var(--error-line)', color: 'var(--error)', padding: '6px 12px', fontSize: '12px' }}
               title="Clear log buffer"
             >
               <Trash2 size={14}/> Clear
@@ -144,38 +144,38 @@ export default function SystemLogs({ logs = [], onClearLogs, onAddLog }) {
       {/* Metrics Row */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.75rem' }}>
         
-        <div style={{ background: 'rgba(0,0,0,0.3)', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid var(--panel-border)' }}>
+        <div style={{ background: 'var(--inset-strong)', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid var(--panel-border)' }}>
           <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Total Events</div>
           <div style={{ fontSize: '1.2rem', fontWeight: 600, fontFamily: 'monospace', color: 'var(--text-primary)' }}>{metrics.total}</div>
         </div>
 
-        <div style={{ background: 'rgba(0,0,0,0.3)', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid var(--panel-border)' }}>
-          <div style={{ fontSize: '11px', color: '#8b5cf6', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Crypto Ops</div>
-          <div style={{ fontSize: '1.2rem', fontWeight: 600, fontFamily: 'monospace', color: '#8b5cf6' }}>{metrics.crypto}</div>
+        <div style={{ background: 'var(--inset-strong)', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid var(--panel-border)' }}>
+          <div style={{ fontSize: '11px', color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Crypto Ops</div>
+          <div style={{ fontSize: '1.2rem', fontWeight: 600, fontFamily: 'monospace', color: 'var(--accent)' }}>{metrics.crypto}</div>
         </div>
 
-        <div style={{ background: 'rgba(0,0,0,0.3)', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid var(--panel-border)' }}>
-          <div style={{ fontSize: '11px', color: '#10b981', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Vault I/O</div>
-          <div style={{ fontSize: '1.2rem', fontWeight: 600, fontFamily: 'monospace', color: '#10b981' }}>{metrics.vault}</div>
+        <div style={{ background: 'var(--inset-strong)', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid var(--panel-border)' }}>
+          <div style={{ fontSize: '11px', color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Vault I/O</div>
+          <div style={{ fontSize: '1.2rem', fontWeight: 600, fontFamily: 'monospace', color: 'var(--accent)' }}>{metrics.vault}</div>
         </div>
 
-        <div style={{ background: 'rgba(0,0,0,0.3)', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid var(--panel-border)' }}>
-          <div style={{ fontSize: '11px', color: '#3b82f6', textTransform: 'uppercase', letterSpacing: '0.5px' }}>P2P / Mesh</div>
-          <div style={{ fontSize: '1.2rem', fontWeight: 600, fontFamily: 'monospace', color: '#3b82f6' }}>{metrics.network}</div>
+        <div style={{ background: 'var(--inset-strong)', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid var(--panel-border)' }}>
+          <div style={{ fontSize: '11px', color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>P2P / Mesh</div>
+          <div style={{ fontSize: '1.2rem', fontWeight: 600, fontFamily: 'monospace', color: 'var(--accent)' }}>{metrics.network}</div>
         </div>
 
-        <div style={{ background: 'rgba(0,0,0,0.3)', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid var(--panel-border)' }}>
-          <div style={{ fontSize: '11px', color: '#ec4899', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Memory Armor</div>
-          <div style={{ fontSize: '1.2rem', fontWeight: 600, fontFamily: 'monospace', color: '#ec4899' }}>Active</div>
+        <div style={{ background: 'var(--inset-strong)', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid var(--panel-border)' }}>
+          <div style={{ fontSize: '11px', color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Memory Armor</div>
+          <div style={{ fontSize: '1.2rem', fontWeight: 600, fontFamily: 'monospace', color: 'var(--accent)' }}>Active</div>
         </div>
 
       </div>
 
       {/* Control Bar: Filters & Search */}
-      <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center', background: 'rgba(0,0,0,0.25)', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--panel-border)' }}>
+      <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center', background: 'var(--inset)', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--panel-border)' }}>
         
         {/* Search */}
-        <div style={{ flex: 1, minWidth: '200px', display: 'flex', alignItems: 'center', background: '#0d1117', borderRadius: '6px', border: '1px solid var(--panel-border)', padding: '0 8px' }}>
+        <div style={{ flex: 1, minWidth: '200px', display: 'flex', alignItems: 'center', background: 'var(--surface-2)', borderRadius: '6px', border: '1px solid var(--panel-border)', padding: '0 8px' }}>
           <Search size={14} color="var(--text-secondary)"/>
           <input 
             value={searchQuery}
@@ -195,8 +195,8 @@ export default function SystemLogs({ logs = [], onClearLogs, onAddLog }) {
                 padding: '4px 8px',
                 fontSize: '11px',
                 borderRadius: '4px',
-                background: categoryFilter === cat ? 'rgba(59, 130, 246, 0.25)' : 'transparent',
-                color: categoryFilter === cat ? 'var(--accent)' : 'var(--text-secondary)',
+                background: categoryFilter === cat ? 'var(--accent-wash)' : 'transparent',
+                color: categoryFilter === cat ? 'var(--accent-ink)' : 'var(--text-secondary)',
                 border: `1px solid ${categoryFilter === cat ? 'var(--accent)' : 'transparent'}`
               }}
             >
@@ -212,9 +212,9 @@ export default function SystemLogs({ logs = [], onClearLogs, onAddLog }) {
             padding: '4px 10px',
             fontSize: '11px',
             borderRadius: '4px',
-            background: autoScroll ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.05)',
+            background: autoScroll ? 'var(--success-wash)' : 'var(--tint)',
             color: autoScroll ? 'var(--success)' : 'var(--text-secondary)',
-            border: `1px solid ${autoScroll ? 'rgba(16, 185, 129, 0.3)' : 'var(--panel-border)'}`
+            border: `1px solid ${autoScroll ? 'var(--success-line)' : 'var(--panel-border)'}`
           }}
         >
           {autoScroll ? <Play size={11}/> : <Pause size={11}/>}
@@ -225,30 +225,30 @@ export default function SystemLogs({ logs = [], onClearLogs, onAddLog }) {
 
       {/* Main Terminal Window */}
       <div style={{
-        background: '#070a12',
+        background: 'var(--bg-color)',
         borderRadius: '8px',
-        border: '1px solid rgba(59, 130, 246, 0.2)',
+        border: '1px solid var(--accent-line)',
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
         fontSize: '12px',
         height: '420px',
         display: 'flex',
         flexDirection: 'column',
-        boxShadow: 'inset 0 2px 8px rgba(0,0,0,0.6)'
+        boxShadow: 'var(--shadow-inset)'
       }}>
         
         {/* Terminal Header */}
         <div style={{
           padding: '8px 12px',
-          background: '#0e1320',
+          background: 'var(--surface-2)',
           borderBottom: '1px solid var(--panel-border)',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center'
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#ef4444' }}></span>
-            <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#f59e0b' }}></span>
-            <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#10b981' }}></span>
+            <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: 'var(--error)' }}></span>
+            <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: 'var(--warn)' }}></span>
+            <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: 'var(--accent)' }}></span>
             <span style={{ marginLeft: '8px', color: 'var(--text-secondary)', fontSize: '11px' }}>hermes-core://system_audit.log</span>
           </div>
 
@@ -267,7 +267,7 @@ export default function SystemLogs({ logs = [], onClearLogs, onAddLog }) {
           gap: '6px'
         }}>
           {filteredLogs.length === 0 ? (
-            <div style={{ margin: 'auto', textAlign: 'center', color: '#4b5563', padding: '2rem' }}>
+            <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--line-strong)', padding: '2rem' }}>
               <Terminal size={32} opacity={0.3} style={{ marginBottom: '8px' }}/>
               <p>No matching system events found.</p>
             </div>
@@ -281,12 +281,12 @@ export default function SystemLogs({ logs = [], onClearLogs, onAddLog }) {
                   gap: '8px',
                   padding: '4px 6px',
                   borderRadius: '4px',
-                  background: 'rgba(255, 255, 255, 0.015)',
+                  background: 'var(--tint-faint)',
                   lineHeight: '1.4'
                 }}
               >
                 {/* Timestamp */}
-                <span style={{ color: '#64748b', fontSize: '11px', flexShrink: 0 }}>
+                <span style={{ color: 'var(--text-secondary)', fontSize: '11px', flexShrink: 0 }}>
                   [{log.timestamp}]
                 </span>
 
@@ -310,10 +310,10 @@ export default function SystemLogs({ logs = [], onClearLogs, onAddLog }) {
                 </span>
 
                 {/* Message */}
-                <span style={{ color: '#e2e8f0', flex: 1, wordBreak: 'break-word' }}>
+                <span style={{ color: 'var(--text-primary)', flex: 1, wordBreak: 'break-word' }}>
                   {log.message}
                   {log.details && (
-                    <span style={{ color: '#94a3b8', marginLeft: '6px', fontSize: '11px' }}>
+                    <span style={{ color: 'var(--text-secondary)', marginLeft: '6px', fontSize: '11px' }}>
                       ({log.details})
                     </span>
                   )}

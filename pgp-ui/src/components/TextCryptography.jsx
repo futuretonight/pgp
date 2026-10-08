@@ -71,7 +71,7 @@ export default function TextCryptography({ keys, passphrase, showNotification, a
       
       setCiphertext(encHex);
       showNotification('Message encrypted successfully', 'success');
-      addLog('SUCCESS', 'CRYPTO', 'Message encrypted with Cv25519', `Target: ${pubHex.substring(0,16)}...`);
+      addLog('SUCCESS', 'CRYPTO', 'Message encrypted with Cv25519', `Recipient key: ${pubBytes.length} bytes`);
     } catch(e) {
       showNotification(e.toString(), 'error');
       addLog('ERROR', 'CRYPTO', 'Failed to encrypt message', e.toString());
@@ -116,7 +116,7 @@ export default function TextCryptography({ keys, passphrase, showNotification, a
               value={plaintext} 
               onChange={e => { setPlaintext(e.target.value); setVerifyResult(null); }} 
               placeholder="Enter text to encrypt or sign..."
-              style={{ minHeight: '100px', background: '#0d1117', border: '1px solid var(--panel-border)', color: '#fff', padding: '10px', borderRadius: '6px', resize: 'vertical' }}
+              style={{ minHeight: '100px', background: 'var(--surface-2)', border: '1px solid var(--panel-border)', color: 'var(--text-primary)', padding: '10px', borderRadius: '6px', resize: 'vertical' }}
             />
           </div>
           
@@ -126,7 +126,7 @@ export default function TextCryptography({ keys, passphrase, showNotification, a
               value={signature} 
               onChange={e => { setSignature(e.target.value); setVerifyResult(null); }} 
               placeholder="Detached Ed25519 Signature..."
-              style={{ minHeight: '80px', background: '#0d1117', border: '1px solid var(--panel-border)', color: '#fff', padding: '10px', borderRadius: '6px', resize: 'vertical', fontSize: '0.8rem', fontFamily: 'monospace' }}
+              style={{ minHeight: '80px', background: 'var(--surface-2)', border: '1px solid var(--panel-border)', color: 'var(--text-primary)', padding: '10px', borderRadius: '6px', resize: 'vertical', fontSize: '0.8rem', fontFamily: 'monospace' }}
             />
           </div>
 
@@ -134,7 +134,7 @@ export default function TextCryptography({ keys, passphrase, showNotification, a
             <button onClick={handleSign} className="btn secondary" style={{ flex: 1 }}>
               <FileSignature size={16}/> Sign
             </button>
-            <button onClick={handleVerify} className="btn secondary" style={{ flex: 1, background: 'rgba(16, 185, 129, 0.15)', color: 'var(--success)', borderColor: 'rgba(16, 185, 129, 0.3)' }}>
+            <button onClick={handleVerify} className="btn secondary" style={{ flex: 1, background: 'var(--success-wash)', color: 'var(--success)', border: '1px solid var(--success-line)' }}>
               <CheckCircle size={16}/> Verify
             </button>
           </div>
@@ -143,9 +143,9 @@ export default function TextCryptography({ keys, passphrase, showNotification, a
             <div style={{ 
               padding: '0.75rem', 
               borderRadius: '6px', 
-              background: verifyResult ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+              background: verifyResult ? 'var(--success-wash)' : 'var(--error-wash)',
               color: verifyResult ? 'var(--success)' : 'var(--error)',
-              border: `1px solid ${verifyResult ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+              border: `1px solid ${verifyResult ? 'var(--success-line)' : 'var(--error-line)'}`,
               display: 'flex',
               alignItems: 'center',
               gap: '0.5rem',
@@ -166,7 +166,7 @@ export default function TextCryptography({ keys, passphrase, showNotification, a
               value={targetPubKey} 
               onChange={e => setTargetPubKey(e.target.value)} 
               placeholder={keys?.pub ? "Leave blank to self-encrypt" : "Enter public key to encrypt/verify against..."}
-              style={{ background: '#0d1117', border: '1px solid var(--panel-border)', color: '#fff', padding: '10px', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.8rem' }}
+              style={{ background: 'var(--surface-2)', border: '1px solid var(--panel-border)', color: 'var(--text-primary)', padding: '10px', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.8rem' }}
             />
           </div>
 
@@ -176,12 +176,12 @@ export default function TextCryptography({ keys, passphrase, showNotification, a
               value={ciphertext} 
               onChange={e => setCiphertext(e.target.value)} 
               placeholder="Encrypted data block..."
-              style={{ minHeight: '145px', background: '#0d1117', border: '1px solid var(--panel-border)', color: '#fff', padding: '10px', borderRadius: '6px', resize: 'vertical', fontSize: '0.8rem', fontFamily: 'monospace' }}
+              style={{ minHeight: '145px', background: 'var(--surface-2)', border: '1px solid var(--panel-border)', color: 'var(--text-primary)', padding: '10px', borderRadius: '6px', resize: 'vertical', fontSize: '0.8rem', fontFamily: 'monospace' }}
             />
           </div>
 
           <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <button onClick={handleEncrypt} className="btn secondary" style={{ flex: 1, background: 'rgba(59, 130, 246, 0.15)', color: 'var(--accent)', borderColor: 'rgba(59, 130, 246, 0.3)' }}>
+            <button onClick={handleEncrypt} className="btn secondary" style={{ flex: 1, background: 'var(--accent-wash)', color: 'var(--accent-ink)', border: '1px solid var(--accent-line)' }}>
               <Lock size={16}/> Encrypt
             </button>
             <button onClick={handleDecrypt} className="btn secondary" style={{ flex: 1 }}>
