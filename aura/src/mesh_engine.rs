@@ -21,18 +21,26 @@ pub struct TorMeshNode {
     incoming_rx: Mutex<Option<mpsc::Receiver<Vec<u8>>>>,
 }
 
-/// Directories searched for pluggable-transport binaries, besides `$PATH`.
-/// Tor Browser ships `lyrebird` (obfs4, meek_lite, webtunnel, snowflake).
+/// Directories searched for pluggable-transport binaries, in priority order.
+/// Hermes ships `lyrebird` (obfs4, meek_lite, webtunnel, snowflake) as a Tauri sidecar, which the
+/// bundler places next to the app executable. Release builds use only that copy, so nothing on the
+/// user's PATH can stand in for it; debug builds also look where Tor Browser or Homebrew put one.
 fn pt_search_dirs() -> Vec<PathBuf> {
-    const TOR_BROWSER_PT: &str = "Tor Browser.app/Contents/MacOS/Tor/PluggableTransports";
-    let mut dirs = vec![PathBuf::from("/Applications").join(TOR_BROWSER_PT)];
-    if let Some(home) = std::env::var_os("HOME") {
-        dirs.push(PathBuf::from(home).join("Applications").join(TOR_BROWSER_PT));
+    let mut dirs = Vec::new();
+    if let Some(exe_dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(PathBuf::from)) {
+        dirs.push(exe_dir);
     }
-    dirs.push(PathBuf::from("/opt/homebrew/bin"));
-    dirs.push(PathBuf::from("/usr/local/bin"));
-    if let Some(path) = std::env::var_os("PATH") {
-        dirs.extend(std::env::split_paths(&path));
+    if cfg!(debug_assertions) {
+        const TOR_BROWSER_PT: &str = "Tor Browser.app/Contents/MacOS/Tor/PluggableTransports";
+        dirs.push(PathBuf::from("/Applications").join(TOR_BROWSER_PT));
+        if let Some(home) = std::env::var_os("HOME") {
+            dirs.push(PathBuf::from(home).join("Applications").join(TOR_BROWSER_PT));
+        }
+        dirs.push(PathBuf::from("/opt/homebrew/bin"));
+        dirs.push(PathBuf::from("/usr/local/bin"));
+        if let Some(path) = std::env::var_os("PATH") {
+            dirs.extend(std::env::split_paths(&path));
+        }
     }
     dirs
 }
@@ -40,7 +48,7 @@ fn pt_search_dirs() -> Vec<PathBuf> {
 fn find_binary(names: &[&str]) -> Option<PathBuf> {
     for dir in pt_search_dirs() {
         for name in names {
-            let candidate = dir.join(name);
+            let candidate = dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
             if candidate.is_file() {
                 return Some(candidate);
             }
@@ -49,15 +57,27 @@ fn find_binary(names: &[&str]) -> Option<PathBuf> {
     None
 }
 
-/// Pick the binary that provides a pluggable-transport protocol.
-fn pt_binary_for(protocol: &str) -> Option<PathBuf> {
-    match protocol {
-        "snowflake" => find_binary(&["snowflake-client", "lyrebird"]),
-        "obfs4" | "meek_lite" | "webtunnel" | "obfs3" | "scramblesuit" => {
-            find_binary(&["lyrebird", "obfs4proxy"])
+/// Pick the binary that provides a pluggable-transport protocol. The bundled lyrebird covers
+/// them all; the other names are only found by debug builds' wider search.
+fn pt_binary_for(protocol: &str) -> Result<PathBuf> {
+    let names: &[&str] = match protocol {
+        "snowflake" => &["lyrebird", "snowflake-client"],
+        "obfs4" | "meek_lite" | "webtunnel" | "obfs3" | "scramblesuit" => &["lyrebird", "obfs4proxy"],
+        _ => anyhow::bail!("Bridges of type '{protocol}' are not supported."),
+    };
+    find_binary(names).ok_or_else(|| {
+        if cfg!(debug_assertions) {
+            anyhow::anyhow!(
+                "Bridges of type '{protocol}' need the lyrebird transport. Run `npm run sidecars` \
+                 in pgp-ui, then restart `npm run tauri dev`."
+            )
+        } else {
+            anyhow::anyhow!(
+                "Bridges of type '{protocol}' need the lyrebird transport that ships with Hermes, \
+                 but it is missing from the install. Reinstall Hermes."
+            )
         }
-        _ => None,
-    }
+    })
 }
 
 /// The transport named by a bridge line, or `None` for a plain (direct) bridge.
@@ -103,12 +123,7 @@ impl TorMeshNode {
             let mut by_binary: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
             for line in &lines {
                 if let Some(protocol) = bridge_transport(line) {
-                    let binary = pt_binary_for(protocol).ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "Bridges of type '{protocol}' need a pluggable transport. Install Tor Browser \
-                             (it ships lyrebird) or put lyrebird / obfs4proxy / snowflake-client on your PATH."
-                        )
-                    })?;
+                    let binary = pt_binary_for(protocol)?;
                     let protocols = by_binary.entry(binary).or_default();
                     if !protocols.iter().any(|p| p == protocol) {
                         protocols.push(protocol.to_string());

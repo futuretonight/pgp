@@ -2,3 +2,6 @@
 # will have compiled files and executables
 /target/
 /gen/schemas
+
+# Sidecar binaries, fetched and checksum-verified by scripts/fetch-sidecars.mjs
+/binaries/
