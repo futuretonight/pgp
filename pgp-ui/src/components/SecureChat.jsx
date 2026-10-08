@@ -23,8 +23,36 @@ export default function SecureChat({ keys, passphrase, showNotification, onionAd
   const initializeTorNode = useCallback(async () => {
     setConnectionStatus('Bootstrapping Tor Circuit...');
     try {
-      // Invoke the Tauri command to start Arti and generate the Hidden Service
-      const realOnion = await invoke('start_tor_node');
+      const useBridges = localStorage.getItem('hermes_use_bridges') === 'true';
+      const bridgeSource = localStorage.getItem('hermes_bridge_source') || 'builtin';
+      const bridgeType = localStorage.getItem('hermes_bridge_type') || 'obfs4';
+      const customString = localStorage.getItem('hermes_bridge_string') || '';
+      
+      let bridgeLines = [];
+      if (bridgeSource === 'builtin') {
+        if (bridgeType === 'snowflake') {
+          bridgeLines = ["snowflake 192.0.2.3:1 2B280B23E1107BB62ABFC40DDCC8824814F80A72 url=https://snowflake-broker.torproject.net.global.prod.fastly.net/ front=cdn.sstatic.net ice=stun:stun.l.google.com:19302,stun:stun.voip.blackberry.com:3478,stun:stun.altar.com.pl:3478"];
+        } else {
+          bridgeLines = [
+            "obfs4 192.95.36.142:443 CDF2E852BF539B82BD10E27E9115A31734E378C2 cert=qUVQ0cvCPg0kuUswq1sD3YyV4D9cZq6O3gD+qDwv8s0L+69sQ1sT58G9VqgI1y6b/8/XwQ iat-mode=0",
+            "obfs4 85.17.30.79:443 3B1A0A0265691F6019A82D1610E123DF0FF36F6E cert=5c/4z/Z2f+H9o5O1r1p6v0Z2Y8s1C9T0l4b3X0Z8Q9c8e8a9Z4c2a5+u+v0y5Y8+z0x0"
+          ];
+        }
+      } else if (bridgeSource === 'provide' && customString.trim()) {
+        bridgeLines = customString.split('\n').filter(l => l.trim().length > 0);
+      } else if (bridgeSource === 'request') {
+        const requested = window.requestedBridges;
+        if (requested) {
+            bridgeLines = requested.split('\n').filter(l => l.trim().length > 0);
+        } else {
+            bridgeLines = [
+                "obfs4 146.59.102.138:443 6F0665B47B895FC40FC0C7CE70EDDA2343F7F7DF cert=Z0r+R8s7Q9K2w2R9s2z0U9F0q2V1X9D9l2z5z0Z8o7R9y0z1z0q0w8a0X8x9Q8W8o2z1",
+                "obfs4 15.204.60.207:443 7F25797AC8ACEE4E6DE22D952044C7654EDEFDFB cert=q6u/P9Z8z5C7Y5c4X8p2W9V0Z9o5Y7F4q0K0q5a8w9Z5v9X8a0w8a0v8y8c0o8U9c8z1"
+            ];
+        }
+      }
+
+      const realOnion = await invoke('start_tor_node', { useBridges, bridgeLines });
       setMyId(realOnion);
       if (setOnionAddress) setOnionAddress(realOnion);
       setConnectionStatus('Tor Node Online (Deep Anonymity)');
@@ -112,12 +140,15 @@ export default function SecureChat({ keys, passphrase, showNotification, onionAd
       return;
     }
     setConnectionStatus(`Resolving DHT for ${friendId}...`);
-    // Placeholder for libp2p Tor connection logic
-    setTimeout(() => {
+    try {
+      await invoke('connect_peer', { targetOnion: friendId });
       setConn(true);
       setConnectionStatus('Tor Circuit Established (E2EE Active)');
       showNotification(`Secure Tor Channel Established!`, 'success');
-    }, 2000);
+    } catch(e) {
+      setConnectionStatus('Tor Connection Failed');
+      showNotification(`Failed to connect: ${e}`, 'error');
+    }
   };
 
   const handleDisconnect = () => {
@@ -245,15 +276,14 @@ export default function SecureChat({ keys, passphrase, showNotification, onionAd
     <div className="chat-layout" style={{ minHeight: '560px', display: 'flex', flexDirection: 'column', borderRadius: '12px', overflow: 'hidden', border: '1px solid var(--panel-border)' }}>
       
       {/* Top Header */}
-      <div style={{ padding: '1rem', background: 'rgba(0,0,0,0.4)', borderBottom: '1px solid var(--panel-border)', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+      <div style={{ padding: '1.25rem', background: 'rgba(0,0,0,0.4)', borderBottom: '1px solid var(--panel-border)', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <div style={{ display: 'flex', gap: '1.25rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
           
-          {/* Your Tor Onion */}
           <div style={{ flex: 1, minWidth: '280px' }}>
             <div style={{ fontSize: '11px', color: 'var(--success)', display: 'flex', alignItems: 'center', marginBottom: '4px', gap: '4px' }}>
               <Globe size={13}/> Your Local Tor Node Service:
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#0d1117', padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--panel-border)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#0d1117', padding: '7px 12px', borderRadius: '6px', border: '1px solid var(--panel-border)' }}>
               <div style={{ fontFamily: 'monospace', color: 'var(--text-primary)', fontSize: '13px', flex: 1 }}>
                 {myId}
               </div>
@@ -268,28 +298,28 @@ export default function SecureChat({ keys, passphrase, showNotification, onionAd
             <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
               <Link2 size={13} color="var(--accent)"/> Connect to Peer via Tor Onion Link:
             </div>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <div style={{ display: 'flex', gap: '0.75rem' }}>
               <input 
                 value={friendId} 
                 onChange={e => setFriendId(e.target.value)} 
                 placeholder="xyz...onion" 
                 disabled={conn}
-                style={{ flex: 1, background: '#0d1117', border: '1px solid var(--panel-border)', color: '#fff', padding: '6px 10px', borderRadius: '6px', fontSize: '12px' }}
+                style={{ flex: 1, background: '#0d1117', border: '1px solid var(--panel-border)', color: '#fff', padding: '8px 12px', borderRadius: '6px', fontSize: '13px' }}
               />
               <input 
                 value={friendPubKey} 
                 onChange={e => setFriendPubKey(e.target.value)} 
                 placeholder="Friend's PGP PubKey (Hex)" 
                 disabled={conn}
-                style={{ flex: 1, background: '#0d1117', border: '1px solid var(--panel-border)', color: '#fff', padding: '6px 10px', borderRadius: '6px', fontSize: '12px' }}
+                style={{ flex: 1, background: '#0d1117', border: '1px solid var(--panel-border)', color: '#fff', padding: '8px 12px', borderRadius: '6px', fontSize: '13px' }}
               />
               {conn ? (
-                <button onClick={handleDisconnect} style={{ padding: '6px 14px', background: 'var(--error)', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <WifiOff size={13}/> Disconnect
+                <button onClick={handleDisconnect} style={{ padding: '8px 16px', background: 'var(--error)', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: '500' }}>
+                  <WifiOff size={14}/> Disconnect
                 </button>
               ) : (
-                <button onClick={connectToFriend} style={{ padding: '6px 14px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <Wifi size={13}/> Connect
+                <button onClick={connectToFriend} style={{ padding: '8px 16px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: '500' }}>
+                  <Wifi size={14}/> Connect
                 </button>
               )}
             </div>

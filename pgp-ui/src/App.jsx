@@ -104,11 +104,24 @@ function App() {
   const [dhtHash, setDhtHash] = useState('Resolving...');
   const [onionAddress, setOnionAddress] = useState('Routing...');
   const [ping, setPing] = useState(0);
+  const [globalNodes, setGlobalNodes] = useState(0);
+  const [nodeStatus, setNodeStatus] = useState('Bootstrapping...');
 
   useEffect(() => {
-    const pinger = setInterval(() => setPing(Math.floor(Math.random() * 50) + 20), 2000);
+    const fetchTelemetry = async () => {
+      try {
+        const data = await invoke('get_telemetry');
+        setPing(data.ping);
+        setGlobalNodes(data.nodes);
+        setNodeStatus(data.status);
+      } catch (err) {
+        console.error("Telemetry error:", err);
+      }
+    };
+    const pinger = setInterval(fetchTelemetry, 2000);
+    fetchTelemetry();
     return () => { clearInterval(pinger); }
-  }, [addLog]);
+  }, []);
   
   const showNotification = (msg, type = 'success') => {
     setNotification({ msg, type });
@@ -118,7 +131,8 @@ function App() {
   const handleCreateIdentity = async () => {
     try {
       if (!passphrase) throw new Error("Please enter a Master Passphrase to secure your identity.");
-      const res = await invoke('create_identity', { passphrase, userId });
+      const algo = localStorage.getItem('hermes_algo') || 'ecc';
+      const res = await invoke('create_identity', { passphrase, userId, algo });
       const pubHex = Array.from(new Uint8Array(res[0])).map(b => b.toString(16).padStart(2, '0')).join('');
       const privHex = Array.from(new Uint8Array(res[1])).map(b => b.toString(16).padStart(2, '0')).join('');
       setKeys({ pub: pubHex, priv: privHex });
@@ -233,24 +247,36 @@ function App() {
           <SettingsIcon size={18} /> Settings
         </button>
 
-        <div style={{ margin: '1rem 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem', background: 'rgba(0,0,0,0.2)', borderRadius: '6px', border: '1px solid var(--panel-border)' }}>
-          <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Chat Keep-Alive</span>
-          <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
-            <input 
-              type="checkbox" 
-              checked={keepAlive} 
-              onChange={e => setKeepAlive(e.target.checked)} 
-              style={{ accentColor: 'var(--accent)', width: '16px', height: '16px' }}
-            />
-          </label>
-        </div>
-
-        <div style={{ marginTop: 'auto', padding: '1rem', background: 'rgba(0,0,0,0.3)', borderRadius: '8px', border: '1px solid var(--panel-border)' }}>
-          <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-            <Server size={14}/> SYSTEM STATUS
-          </p>
-          <p style={{ fontSize: '0.85rem', color: 'var(--success)', fontFamily: 'monospace' }}>● Node Online</p>
-          <p style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontFamily: 'monospace' }}>Ping: {ping}ms</p>
+        <div style={{ marginTop: 'auto', padding: '1rem', background: 'rgba(0,0,0,0.3)', borderRadius: '8px', border: '1px solid var(--panel-border)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.25rem', fontWeight: 600, letterSpacing: '0.5px' }}>
+              <Server size={14}/> SYSTEM STATUS
+            </span>
+            <button 
+              title="Run in Headless Node Mode (Route traffic without UI)"
+              onClick={async () => {
+                try {
+                  await invoke('toggle_headless', { hide: true });
+                  showNotification('Node running in background', 'info');
+                } catch(e) {
+                  showNotification('Headless mode failed: ' + e, 'error');
+                }
+              }}
+              style={{ background: 'transparent', border: '1px solid var(--accent)', color: 'var(--accent)', fontSize: '0.6rem', padding: '2px 6px', borderRadius: '4px', cursor: 'pointer' }}>
+              Run Node
+            </button>
+          </div>
+          <div>
+            <p style={{ fontSize: '0.85rem', color: nodeStatus === 'Bootstrapping...' ? 'var(--text-secondary)' : 'var(--success)', fontFamily: 'monospace', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+              <span style={{ fontSize: '10px' }}>●</span> {nodeStatus}
+            </p>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontFamily: 'monospace', marginBottom: '4px' }}>
+              Ping: {ping > 0 ? ping + 'ms' : '--'}
+            </p>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontFamily: 'monospace' }}>
+              Global Nodes: {globalNodes > 0 ? globalNodes.toLocaleString() : '--'}
+            </p>
+          </div>
         </div>
       </div>
 
@@ -282,8 +308,9 @@ function App() {
         </div>
 
         {/* Dynamic Panels */}
-        <div className="glass-panel content-panel" key={activeTab}>
-          {activeTab === 'identity' && (
+        {(activeTab === 'identity' || activeTab === 'files') && (
+          <div className="glass-panel content-panel" key={activeTab}>
+            {activeTab === 'identity' && (
             <div>
               <h2>Identity Generation & Keyring</h2>
               <p className="subtitle" style={{marginBottom: '1rem'}}>Create a permanent node identity or an ephemeral keypair mapped to your Tor hidden service.</p>
@@ -412,8 +439,9 @@ function App() {
               </div>
             </div>
           </div>
+        )}
 
-          {(keepAlive || activeTab === 'messaging') && (
+        {(keepAlive || activeTab === 'messaging') && (
             <div style={{ display: activeTab === 'messaging' ? 'block' : 'none', height: '100%' }}>
               <SecureChat 
                 keys={keys} 

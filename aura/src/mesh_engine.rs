@@ -16,9 +16,21 @@ pub struct TorMeshNode {
 }
 
 impl TorMeshNode {
-    /// Bootstraps the Tor circuit
-    pub async fn new() -> Result<Self> {
-        let config = TorClientConfig::default();
+    pub async fn new(use_bridges: bool, bridge_lines: Vec<String>) -> Result<Self> {
+        let mut builder = TorClientConfig::builder();
+        
+        if use_bridges && !bridge_lines.is_empty() {
+            let mut bridge_config = Vec::new();
+            for line in bridge_lines {
+                // arti_client supports parsing standard bridge lines
+                if let Ok(bridge) = line.parse() {
+                    bridge_config.push(bridge);
+                }
+            }
+            builder.bridges().set_bridges(bridge_config);
+        }
+        
+        let config = builder.build()?;
         let client = TorClient::create_bootstrapped(config).await?;
         
         let (tx, rx) = mpsc::channel(100);
@@ -41,39 +53,41 @@ impl TorMeshNode {
     pub async fn start_hidden_service(&self) -> Result<()> {
         let mut lock = self.onion_address.lock().await;
         
-        // TODO: Wire up actual tor_hsservice once the API stabilizes.
-        // For now, simulate a node address generation.
-        {
-            use rand::RngCore;
-            let mut rng = rand::thread_rng();
-            let mut bytes = [0u8; 16];
-            rng.fill_bytes(&mut bytes);
-            let hex = hex::encode(bytes);
-            *lock = Some(format!("hermes{}.onion", hex));
-        }
+        use tor_hsservice::config::OnionServiceConfigBuilder;
+        let nickname = "hermes".to_string().try_into().unwrap();
+        let svc_config = OnionServiceConfigBuilder::default()
+            .nickname(nickname)
+            .build()
+            .map_err(|e| anyhow::anyhow!("Config build failed: {}", e))?;
+            
+        let (mut req_stream, onion_svc) = self.client.launch_onion_service(svc_config)
+            .map_err(|e| anyhow::anyhow!("Onion launch error: {}", e))?;
         
-        // Setup a local listener to simulate receiving hidden service traffic
-        // In a real Arti implementation, this would be a stream from launch_onion_service
-        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        // Retrieve the real onion address
+        let onion_id = onion_svc.onion_name().ok_or_else(|| anyhow::anyhow!("No onion name generated"))?;
+        *lock = Some(format!("{}.onion", onion_id));
+        
         let tx = self.incoming_tx.clone();
         
+        // Listen for actual Tor incoming rendezvous requests
         tokio::spawn(async move {
-            loop {
-                if let Ok((mut socket, _)) = listener.accept().await {
-                    let tx_clone = tx.clone();
-                    tokio::spawn(async move {
+            use futures::StreamExt;
+            while let Some(req) = req_stream.next().await {
+                let tx_clone = tx.clone();
+                tokio::spawn(async move {
+                    if let Ok(mut stream) = req.accept().await {
                         let mut len_buf = [0u8; 4];
-                        if socket.read_exact(&mut len_buf).await.is_ok() {
+                        if stream.read_exact(&mut len_buf).await.is_ok() {
                             let len = u32::from_le_bytes(len_buf) as usize;
                             if len < 10 * 1024 * 1024 { // max 10MB payload
                                 let mut payload = vec![0u8; len];
-                                if socket.read_exact(&mut payload).await.is_ok() {
+                                if stream.read_exact(&mut payload).await.is_ok() {
                                     let _ = tx_clone.send(payload).await;
                                 }
                             }
                         }
-                    });
-                }
+                    }
+                });
             }
         });
         
