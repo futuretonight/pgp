@@ -1,12 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Key, Database, MessageSquare, Shield, CheckCircle, AlertCircle, Activity, Globe, Lock, Unlock, Cpu, Server, Network, Save, FolderLock, FileText, Terminal, Settings as SettingsIcon } from 'lucide-react';
+import { listen } from '@tauri-apps/api/event';
+import { Key, Database, MessageSquare, Shield, CheckCircle, AlertCircle, Activity, Globe, Lock, Unlock, Cpu, Server, Network, Save, FolderLock, FileText, Terminal, Copy, RefreshCw, Settings as SettingsIcon } from 'lucide-react';
 import SecureChat from './components/SecureChat';
 import SystemLogs from './components/SystemLogs';
 import Settings from './components/Settings';
 import TextCryptography from './components/TextCryptography';
 import { applyTheme, loadTheme } from './themes';
-import { PREF_KEYS, readPref } from './prefs';
+import { PREF_KEYS, readPref, torStartOptions } from './prefs';
+import { toHex, fromHex } from './hex';
 
 const SecureFramebufferText = ({ text, style = {} }) => {
   const canvasRef = useRef(null);
@@ -62,6 +64,7 @@ function App() {
   
   const [passphrase, setPassphrase] = useState('');
   const [vaultPath, setVaultPath] = useState('my_vault.kdbx');
+  const [vaultLocation, setVaultLocation] = useState('');
   const [userId, setUserId] = useState('');
   const [keys, setKeys] = useState(null);
   
@@ -91,7 +94,7 @@ function App() {
       timestamp: new Date().toLocaleTimeString(),
       level: 'INFO',
       category: 'VAULT',
-      message: 'KDBX v4 Vault persistence module ready',
+      message: 'Vault persistence module ready',
       details: 'Argon2id KDF + XChaCha20-Poly1305'
     },
     {
@@ -99,8 +102,8 @@ function App() {
       timestamp: new Date().toLocaleTimeString(),
       level: 'INFO',
       category: 'NETWORK',
-      message: 'Tor Client / Arti Proxy initialized',
-      details: 'Awaiting Onion Circuit bootstrapping'
+      message: 'Embedded Arti Tor client starting',
+      details: 'Downloading the network consensus'
     }
   ]);
 
@@ -122,22 +125,18 @@ function App() {
     ]);
   }, []);
 
-  // Network State for Information Dense View
-  const [dhtHash, setDhtHash] = useState('Resolving...');
-  const [onionAddress, setOnionAddress] = useState('Routing...');
-  const [ping, setPing] = useState(0);
-  const [globalNodes, setGlobalNodes] = useState(0);
-  const [nodeStatus, setNodeStatus] = useState('Bootstrapping...');
+  // Tor node state. `tor` is the live status from the backend (null until the node exists);
+  // `torPhase` tracks our start_tor_node call: 'starting' | 'online' | 'error'.
+  const [tor, setTor] = useState(null);
+  const [torPhase, setTorPhase] = useState('starting');
+  const [torError, setTorError] = useState('');
+  const [onionAddress, setOnionAddress] = useState('');
 
-  // Real telemetry from the backend: node state, ping to the Tor metrics API,
-  // and the public relay + bridge count (refreshed there at most once a minute).
+  // Poll the node: bootstrap progress, consensus size, onion-service state. No network traffic.
   useEffect(() => {
     const fetchTelemetry = async () => {
       try {
-        const data = await invoke('get_telemetry');
-        setPing(data.ping);
-        setGlobalNodes(data.nodes);
-        setNodeStatus(data.status);
+        setTor(await invoke('get_telemetry'));
       } catch (err) {
         console.error('Telemetry error:', err);
       }
@@ -146,7 +145,18 @@ function App() {
     const pinger = setInterval(fetchTelemetry, 2000);
     return () => { clearInterval(pinger); };
   }, []);
-  
+
+  // Connection milestones and problems reported by the Tor engine go to the System Logs.
+  useEffect(() => {
+    let unlisten;
+    let cancelled = false;
+    listen('tor-log', (event) => {
+      const { level, message } = event.payload || {};
+      addLog(level || 'INFO', 'NETWORK', message || '');
+    }).then(fn => { if (cancelled) fn(); else unlisten = fn; });
+    return () => { cancelled = true; if (unlisten) unlisten(); };
+  }, [addLog]);
+
   // Memoized so its identity is stable: otherwise every render produces a new
   // showNotification, which cascades into initializeTorNode changing and the
   // mount effect re-calling start_tor_node in a loop (repeated Tor bootstraps).
@@ -155,17 +165,53 @@ function App() {
     setTimeout(() => setNotification(null), 3500);
   }, []);
 
+  // Start Tor (or re-apply changed bridge settings). Safe to call again: the backend keeps one node.
+  const startTor = useCallback(async () => {
+    setTorPhase('starting');
+    setTorError('');
+    try {
+      const address = await invoke('start_tor_node', torStartOptions());
+      setOnionAddress(address);
+      setTorPhase('online');
+      addLog('SUCCESS', 'NETWORK', 'Onion service launched; peers can reach you once it is published', address);
+      showNotification('Connected to Tor. Your onion address is ready.', 'success');
+    } catch (e) {
+      const msg = e?.message ?? String(e);
+      setTorPhase('error');
+      setTorError(msg);
+      addLog('ERROR', 'NETWORK', 'Could not connect to Tor', msg);
+      showNotification('Tor connection failed: ' + msg, 'error');
+    }
+  }, [addLog, showNotification]);
+
+  // Connect as soon as the app opens, so the node is online before the chat tab is visited.
+  const torStarted = useRef(false);
+  useEffect(() => {
+    if (torStarted.current) return;
+    torStarted.current = true;
+    startTor();
+  }, [startTor]);
+
+  const copyPublicKey = async () => {
+    if (!keys?.pub) return;
+    try {
+      await navigator.clipboard.writeText(keys.pub);
+      showNotification('Public key copied. Send it to your peer along with your onion address.', 'success');
+    } catch (e) {
+      showNotification('Could not copy: ' + e, 'error');
+    }
+  };
+
   const handleCreateIdentity = async () => {
     try {
       if (!passphrase) throw new Error("Please enter a Master Passphrase to secure your identity.");
       const algo = readPref(PREF_KEYS.algo, 'ecc');
-      const res = await invoke('create_identity', { passphrase, userId, algo });
-      const pubHex = Array.from(new Uint8Array(res[0])).map(b => b.toString(16).padStart(2, '0')).join('');
-      const privHex = Array.from(new Uint8Array(res[1])).map(b => b.toString(16).padStart(2, '0')).join('');
-      setKeys({ pub: pubHex, priv: privHex });
+      if (algo === 'rsa') showNotification('Generating an RSA-4096 key; this can take a while on slower machines...', 'success');
+      const res = await invoke('create_identity', { passphrase, userId: userId.trim() || 'Anonymous', algo });
+      setKeys({ pub: toHex(res[0]), priv: toHex(res[1]) });
       showNotification('Permanent node identity created successfully!');
       addLog('SUCCESS', 'CRYPTO', 'Permanent OpenPGP Node Identity generated', `Alias: ${userId || 'Anonymous'}`);
-      addLog('INFO', 'SECURITY', 'Private key buffered in XOR MaskedMemory & Zeroize container');
+      addLog('INFO', 'SECURITY', 'Private key is protected by your passphrase (OpenPGP S2K)');
     } catch (e) { 
       showNotification(e.toString(), 'error');
       addLog('ERROR', 'CRYPTO', 'Failed to generate permanent identity', e.toString());
@@ -175,9 +221,7 @@ function App() {
   const handleTempChat = async () => {
     try {
       const res = await invoke('start_temporary_chat');
-      const pubHex = Array.from(new Uint8Array(res[0])).map(b => b.toString(16).padStart(2, '0')).join('');
-      const privHex = Array.from(new Uint8Array(res[1])).map(b => b.toString(16).padStart(2, '0')).join('');
-      setKeys({ pub: pubHex, priv: privHex });
+      setKeys({ pub: toHex(res[0]), priv: toHex(res[1]) });
       showNotification('Temporary ephemeral session keys generated');
       addLog('INFO', 'CRYPTO', 'Temporary ephemeral keypair generated (Memory-Only)');
     } catch (e) { 
@@ -191,11 +235,10 @@ function App() {
       if (!keys?.pub || !keys?.priv) throw new Error("No active cryptographic keys to save. Generate or create an identity first.");
       if (!passphrase) throw new Error("Master Passphrase is required to encrypt the vault.");
       const targetPath = vaultPath.trim() || 'my_vault.kdbx';
-      const pubBytes = Array.from(keys.pub.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-      const privBytes = Array.from(keys.priv.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-      await invoke('save_vault', { pubKeyBytes: pubBytes, privKeyBytes: privBytes, passphrase, path: targetPath });
-      showNotification(`Vault encrypted and saved to ${targetPath}`, 'success');
-      addLog('SUCCESS', 'VAULT', 'Identity keypair encrypted with Argon2/XChaCha20 and saved to disk', targetPath);
+      const savedTo = await invoke('save_vault', { pubKeyBytes: fromHex(keys.pub), privKeyBytes: fromHex(keys.priv), passphrase, path: targetPath });
+      setVaultLocation(savedTo);
+      showNotification(`Vault encrypted and saved to ${savedTo}`, 'success');
+      addLog('SUCCESS', 'VAULT', 'Identity keypair encrypted with Argon2/XChaCha20 and saved to disk', savedTo);
     } catch(e) {
       showNotification(e.toString(), 'error');
       addLog('ERROR', 'VAULT', 'Failed to save identity to vault', e.toString());
@@ -206,12 +249,11 @@ function App() {
     try {
       if (!passphrase) throw new Error("Master Passphrase is required to decrypt the vault.");
       const targetPath = vaultPath.trim() || 'my_vault.kdbx';
-      const res = await invoke('load_vault', { passphrase, path: targetPath });
-      const pubHex = Array.from(new Uint8Array(res[0])).map(b => b.toString(16).padStart(2, '0')).join('');
-      const privHex = Array.from(new Uint8Array(res[1])).map(b => b.toString(16).padStart(2, '0')).join('');
-      setKeys({ pub: pubHex, priv: privHex });
-      showNotification(`Vault decrypted and loaded from ${targetPath}!`, 'success');
-      addLog('SUCCESS', 'VAULT', 'KDBX Vault decrypted & identity keys restored to active memory', targetPath);
+      const [pub, priv, loadedFrom] = await invoke('load_vault', { passphrase, path: targetPath });
+      setKeys({ pub: toHex(pub), priv: toHex(priv) });
+      setVaultLocation(loadedFrom);
+      showNotification(`Vault decrypted and loaded from ${loadedFrom}`, 'success');
+      addLog('SUCCESS', 'VAULT', 'Vault decrypted & identity keys restored to active memory', loadedFrom);
     } catch(e) {
       showNotification(e.toString(), 'error');
       addLog('ERROR', 'VAULT', 'Failed to decrypt vault file', e.toString());
@@ -223,10 +265,9 @@ function App() {
     try {
       if (!keys?.pub) throw new Error("No public key active. Create or load an identity first.");
       if (!inFile.trim() || !outFile.trim()) throw new Error("Please specify both Input and Output file paths.");
-      const pubBytes = Array.from(keys.pub.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-      await invoke('encrypt_file', { inPath: inFile.trim(), outPath: outFile.trim(), pubKeyBytes: pubBytes });
-      showNotification(`File encrypted successfully to ${outFile.trim()}`, 'success');
-      addLog('SUCCESS', 'VAULT', 'File encrypted via Sequoia OpenPGP stream', `In: ${inFile.trim()} -> Out: ${outFile.trim()}`);
+      const written = await invoke('encrypt_file', { inPath: inFile.trim(), outPath: outFile.trim(), pubKeyBytes: fromHex(keys.pub) });
+      showNotification(`File encrypted successfully to ${written}`, 'success');
+      addLog('SUCCESS', 'VAULT', 'File encrypted via Sequoia OpenPGP stream', `In: ${inFile.trim()} -> Out: ${written}`);
     } catch (e) { 
       showNotification(e.toString(), 'error'); 
       addLog('ERROR', 'VAULT', 'File encryption failed', e.toString());
@@ -236,17 +277,25 @@ function App() {
   const handleDecryptFile = async () => {
     try {
       if (!keys?.priv) throw new Error("No private key active. Create or load an identity first.");
-      if (!passphrase) throw new Error("Master Passphrase is required to decrypt the file.");
       if (!inFile.trim() || !outFile.trim()) throw new Error("Please specify both Input and Output file paths.");
-      const privBytes = Array.from(keys.priv.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-      await invoke('decrypt_file', { inPath: inFile.trim(), outPath: outFile.trim(), privKeyBytes: privBytes, passphrase });
-      showNotification(`File decrypted successfully to ${outFile.trim()}`, 'success');
-      addLog('SUCCESS', 'VAULT', 'File decrypted successfully', `Out: ${outFile.trim()}`);
+      const written = await invoke('decrypt_file', { inPath: inFile.trim(), outPath: outFile.trim(), privKeyBytes: fromHex(keys.priv), passphrase });
+      showNotification(`File decrypted successfully to ${written}`, 'success');
+      addLog('SUCCESS', 'VAULT', 'File decrypted successfully', `Out: ${written}`);
     } catch (e) { 
       showNotification(e.toString(), 'error'); 
       addLog('ERROR', 'VAULT', 'File decryption failed', e.toString());
     }
   };
+
+  const torOnline = torPhase === 'online';
+  const torLabel = torOnline
+    ? `Online · onion ${(tor?.onion || 'starting').toLowerCase()}`
+    : torPhase === 'error'
+      ? 'Offline (connection failed)'
+      : tor
+        ? (tor.blocked ? `Stuck at ${tor.percent}%` : `Connecting ${tor.percent}%`)
+        : 'Starting Tor...';
+  const torColor = torOnline ? 'var(--success)' : torPhase === 'error' ? 'var(--error)' : 'var(--text-secondary)';
 
   return (
     <div className="container">
@@ -305,9 +354,15 @@ function App() {
               Run Node
             </button>
           </div>
-          <p style={{ fontSize: '0.85rem', color: nodeStatus === 'Bootstrapping...' ? 'var(--text-secondary)' : 'var(--success)', fontFamily: 'monospace' }}>● {nodeStatus}</p>
-          <p style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontFamily: 'monospace' }}>Ping: {ping > 0 ? `${ping}ms` : '--'}</p>
-          <p style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontFamily: 'monospace' }}>Global Nodes: {globalNodes > 0 ? globalNodes.toLocaleString() : '--'}</p>
+          <p style={{ fontSize: '0.85rem', color: torColor, fontFamily: 'monospace' }} title={tor?.summary || torError}>● {torLabel}</p>
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontFamily: 'monospace' }}>Route: {tor?.via ?? '--'}</p>
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontFamily: 'monospace' }}>Relays: {tor?.relays ? tor.relays.toLocaleString() : '--'}</p>
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontFamily: 'monospace' }}>Peer RTT: {tor?.peer_rtt_ms ? `${tor.peer_rtt_ms}ms` : '--'}</p>
+          {torPhase === 'error' && (
+            <button onClick={startTor} style={{ background: 'transparent', border: '1px solid var(--accent)', color: 'var(--accent-ink)', fontSize: '0.75rem', padding: '4px 8px', borderRadius: '4px' }}>
+              <RefreshCw size={12}/> Retry Tor
+            </button>
+          )}
         </div>
       </div>
 
@@ -320,15 +375,15 @@ function App() {
           <div className="telemetry-grid">
             <div className="telemetry-box">
               <span className="telemetry-label"><Globe size={14}/> Tor Anonymity</span>
-              <span className="telemetry-value" style={{color: onionAddress === 'Routing...' ? 'var(--error)' : 'var(--success)'}}>
-                {onionAddress === 'Routing...' ? 'Awaiting Circuit...' : 'Connected (Hidden Service)'}
+              <span className="telemetry-value" style={{color: torColor}}>
+                {torOnline ? 'Connected (Hidden Service)' : torPhase === 'error' ? 'Not Connected' : 'Connecting...'}
               </span>
-              <span className="telemetry-subtext" title={onionAddress}>{onionAddress}</span>
+              <span className="telemetry-subtext" title={onionAddress || tor?.summary}>{onionAddress || tor?.blocked || tor?.summary || 'Awaiting circuit'}</span>
             </div>
             <div className="telemetry-box">
-              <span className="telemetry-label"><Network size={14}/> P2P Mesh Routing</span>
-              <span className="telemetry-value">Decentralized</span>
-              <span className="telemetry-subtext">Node Hash: {onionAddress === 'Routing...' ? 'Awaiting' : 'DHT Active'}</span>
+              <span className="telemetry-label"><Network size={14}/> Tor Consensus</span>
+              <span className="telemetry-value">{tor?.relays ? `${tor.relays.toLocaleString()} relays` : (tor ? `Downloading ${tor.percent}%` : 'Waiting')}</span>
+              <span className="telemetry-subtext">Route: {tor?.via ?? '--'}</span>
             </div>
             <div className="telemetry-box">
               <span className="telemetry-label"><Cpu size={14}/> Memory Armor</span>
@@ -375,7 +430,12 @@ function App() {
                   <p style={{color: 'var(--success)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
                     <Lock size={14}/> Cryptographic Keys (Hex):
                   </p>
-                  <strong>Public:</strong> {keys.pub.substring(0, 32)}...<br/>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <span><strong>Public:</strong> {keys.pub.substring(0, 32)}...</span>
+                    <button onClick={copyPublicKey} style={{ padding: '2px 10px', fontSize: '0.75rem', background: 'var(--tint-strong)', color: 'var(--text-primary)', border: '1px solid var(--panel-border)' }}>
+                      <Copy size={12}/> Copy Public Key
+                    </button>
+                  </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.25rem' }}>
                     <strong>Private:</strong> <SecureFramebufferText text={keys.priv.substring(0, 32) + "..."} />
                     <span style={{fontSize: '0.7rem', color: 'var(--accent)'}}>[MEMORY MASKED]</span>
@@ -432,6 +492,9 @@ function App() {
                     onChange={e => setVaultPath(e.target.value)} 
                     placeholder="C:\Users\Secret\my_vault.kdbx" 
                   />
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+                    {vaultLocation ? `Last used: ${vaultLocation}` : "A bare file name is kept in Hermes' app data folder; use a full path to store it elsewhere."}
+                  </span>
                 </div>
 
                 <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
@@ -449,11 +512,11 @@ function App() {
                 <h3 style={{ fontSize: '1.25rem', marginBottom: '0.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <FileText size={20} color="var(--accent)"/> Zero-Knowledge File Armor
                 </h3>
-                <p className="subtitle" style={{marginBottom: '1rem'}}>Directly encrypt and decrypt physical files to disk using AES-256-GCM / Sequoia OpenPGP stream cipher.</p>
+                <p className="subtitle" style={{marginBottom: '1rem'}}>Encrypt files to your public key and decrypt them with your private key (Sequoia OpenPGP, AES-256).</p>
                 
                 <div className="input-group">
                   <label>Input File Path</label>
-                  <input value={inFile} onChange={e => setInFile(e.target.value)} placeholder="C:\Users\Secret\document.pdf" />
+                  <input value={inFile} onChange={e => setInFile(e.target.value)} placeholder="C:\Users\Secret\document.pdf (relative paths start in your home folder)" />
                 </div>
                 <div className="input-group">
                   <label>Output File Path</label>
@@ -473,27 +536,29 @@ function App() {
 
           {(keepAlive || activeTab === 'messaging') && (
             <div style={{ display: activeTab === 'messaging' ? 'block' : 'none', height: '100%' }}>
-              <SecureChat 
-                keys={keys} 
-                passphrase={passphrase} 
-                showNotification={showNotification} 
+              <SecureChat
+                keys={keys}
+                passphrase={passphrase}
+                showNotification={showNotification}
                 onionAddress={onionAddress}
-                setOnionAddress={setOnionAddress}
-                addLog={addLog}
+                tor={tor}
+                torPhase={torPhase}
+                torError={torError}
+                onRetryTor={startTor}
+                onCopyPublicKey={copyPublicKey}
               />
             </div>
           )}
 
           <div style={{ display: activeTab === 'logs' ? 'block' : 'none' }}>
-            <SystemLogs 
-              logs={logs} 
-              onClearLogs={() => setLogs([])} 
-              onAddLog={addLog} 
+            <SystemLogs
+              logs={logs}
+              onClearLogs={() => setLogs([])}
             />
           </div>
 
           <div style={{ display: activeTab === 'settings' ? 'block' : 'none' }}>
-            <Settings keepAlive={keepAlive} setKeepAlive={setKeepAlive} theme={theme} setTheme={setTheme} />
+            <Settings keepAlive={keepAlive} setKeepAlive={setKeepAlive} theme={theme} setTheme={setTheme} onReconnectTor={startTor} torPhase={torPhase} />
           </div>
 
           <div style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: 'auto', paddingBottom: '1rem' }}>

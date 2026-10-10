@@ -6,7 +6,8 @@ authors = ["you"]
 license = ""
 repository = ""
 edition = "2021"
-rust-version = "1.77.2"
+# Arti 0.47 needs Rust 1.92 or newer (`rustup update`).
+rust-version = "1.92"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -26,3 +27,10 @@ tauri-plugin-log = "2"
 aura = { path = "../../aura" }
 tokio = { version = "1.53.2", features = ["sync"] }
 reqwest = { version = "0.12", features = ["json"] }
+anyhow = "1.0"
+
+# Arti checks the consensus signatures and builds circuits with heavy crypto. Unoptimized, that
+# makes connecting to Tor under `tauri dev` take minutes on a slow laptop, so dependencies are
+# always built optimized (our own code still compiles quickly in debug mode).
+[profile.dev.package."*"]
+opt-level = 2

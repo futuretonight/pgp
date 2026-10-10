@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Terminal, Shield, Download, Trash2, Search, Filter, Play, Pause, Copy, Check, Activity, Lock, Cpu, Network, Database, CheckCircle, AlertTriangle, AlertCircle, Info } from 'lucide-react';
+import { Terminal, Download, Trash2, Search, Play, Pause, Copy, Check, CheckCircle, AlertTriangle, AlertCircle, Info } from 'lucide-react';
 
-export default function SystemLogs({ logs = [], onClearLogs, onAddLog }) {
+export default function SystemLogs({ logs = [], onClearLogs }) {
   const [categoryFilter, setCategoryFilter] = useState('ALL');
   const [levelFilter, setLevelFilter] = useState('ALL');
   const [searchQuery, setSearchQuery] = useState('');
@@ -57,22 +57,14 @@ export default function SystemLogs({ logs = [], onClearLogs, onAddLog }) {
   };
 
   // Copy raw logs to clipboard
-  const handleCopyLogs = () => {
+  const handleCopyLogs = async () => {
     const text = logs.map(l => `[${l.timestamp}] [${l.level}] [${l.category}] ${l.message} ${l.details ? '(' + l.details + ')' : ''}`).join('\n');
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  // Helper badge color
-  const getLevelColor = (level) => {
-    switch (level) {
-      case 'SUCCESS': return 'var(--success)';
-      case 'ERROR': return 'var(--error)';
-      case 'WARN': return 'var(--warn)';
-      case 'INFO':
-      default:
-        return 'var(--accent)';
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (e) {
+      console.error('Copy failed:', e);
     }
   };
 
@@ -205,6 +197,16 @@ export default function SystemLogs({ logs = [], onClearLogs, onAddLog }) {
           ))}
         </div>
 
+        {/* Level Filter */}
+        <select
+          value={levelFilter}
+          onChange={e => setLevelFilter(e.target.value)}
+          aria-label="Filter by level"
+          style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '4px', background: 'var(--surface-2)', color: 'var(--text-primary)', border: '1px solid var(--panel-border)' }}
+        >
+          {['ALL', 'SUCCESS', 'INFO', 'WARN', 'ERROR'].map(l => <option key={l} value={l}>{l === 'ALL' ? 'All levels' : l}</option>)}
+        </select>
+
         {/* Auto Scroll Toggle */}
         <button
           onClick={() => setAutoScroll(!autoScroll)}
@@ -298,8 +300,8 @@ export default function SystemLogs({ logs = [], onClearLogs, onAddLog }) {
                 {/* Category Pill */}
                 <span style={{
                   color: getCategoryColor(log.category),
-                  background: `${getCategoryColor(log.category)}18`,
-                  border: `1px solid ${getCategoryColor(log.category)}33`,
+                  background: `color-mix(in srgb, ${getCategoryColor(log.category)} 10%, transparent)`,
+                  border: `1px solid color-mix(in srgb, ${getCategoryColor(log.category)} 20%, transparent)`,
                   fontSize: '10px',
                   padding: '1px 5px',
                   borderRadius: '3px',

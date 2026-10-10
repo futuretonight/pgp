@@ -9,7 +9,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "sidecars": "node scripts/fetch-sidecars.mjs",
-    "pretauri": "node scripts/fetch-sidecars.mjs",
+    "pretauri": "node scripts/fetch-sidecars.mjs --allow-missing",
     "tauri": "tauri"
   },
   "dependencies": {

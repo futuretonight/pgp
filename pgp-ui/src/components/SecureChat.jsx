@@ -1,289 +1,245 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Globe, RefreshCw, Send, ShieldCheck, ShieldAlert, Check, Copy, Wifi, WifiOff, Link2, Key, Lock, AlertCircle, Image as ImageIcon } from 'lucide-react';
+import { Globe, RefreshCw, Send, ShieldCheck, Check, Copy, Wifi, WifiOff, Link2, Key, Lock } from 'lucide-react';
 import './SecureChat.css';
-import { PREF_KEYS, readPref, writePref, splitBridgeLines } from '../prefs';
+import { toHex, fromHex, textBytes } from '../hex';
 
-// Bridge lines for this Tor start, from the source chosen in Settings.
-async function resolveBridgeLines() {
-  const source = readPref(PREF_KEYS.bridgeSource, 'builtin');
-  if (source === 'provide') {
-    const lines = splitBridgeLines(readPref(PREF_KEYS.bridgeString, ''));
-    if (!lines.length) throw new Error('Bridges are on but no bridge lines were provided in Settings.');
-    return lines;
-  }
-  if (source === 'request') {
-    const lines = splitBridgeLines(readPref(PREF_KEYS.requestedBridges, ''));
-    if (!lines.length) throw new Error("Bridges are on but none were requested yet. Use 'Request a New Bridge' in Settings.");
-    return lines;
-  }
-  // Built-in: Tor Project's default bridges of the chosen type, cached for offline starts.
-  const type = readPref(PREF_KEYS.bridgeType, 'obfs4');
-  const cacheKey = `hermes_builtin_bridges_${type}`;
-  try {
-    const fetched = await invoke('request_bridges', { transport: type });
-    writePref(cacheKey, fetched);
-    return splitBridgeLines(fetched);
-  } catch (e) {
-    const cached = splitBridgeLines(readPref(cacheKey, ''));
-    if (cached.length) return cached;
-    throw new Error(`Could not fetch built-in ${type} bridges (${e}). Paste bridges from bridges.torproject.org under 'Provide a bridge'.`);
-  }
-}
+// Images are signed, encrypted and sent inside one Tor message (10 MB limit after encoding).
+const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
+const SAFE_IMAGE = /^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/=]+$/;
 
-export default function SecureChat({ keys, passphrase, showNotification, onionAddress, setOnionAddress }) {
-  const [myId, setMyId] = useState(onionAddress || 'Generating Onion Address...');
+export default function SecureChat({ keys, passphrase, showNotification, onionAddress, tor, torPhase, torError, onRetryTor, onCopyPublicKey }) {
   const [friendId, setFriendId] = useState('');
   const [friendPubKey, setFriendPubKey] = useState('');
   const [conn, setConn] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   const [draft, setDraft] = useState('');
   const [messages, setMessages] = useState([]);
-  const [connectionStatus, setConnectionStatus] = useState('Initializing Tor Node...');
   const [copied, setCopied] = useState(false);
-  const [isEditingOnion, setIsEditingOnion] = useState(false);
-  const [customOnionInput, setCustomOnionInput] = useState(onionAddress || '');
-  const [pastingMedia, setPastingMedia] = useState(false);
+  const [sending, setSending] = useState(false);
+
+  const torOnline = torPhase === 'online';
+  const myId = onionAddress || (torPhase === 'error' ? 'Tor is not connected' : 'Connecting to Tor...');
+  const connectionStatus = conn
+    ? 'Tor Circuit Established (E2EE Active)'
+    : connecting
+      ? 'Building Tor circuit to peer...'
+      : torPhase === 'error'
+        ? 'Tor Connection Error'
+        : torOnline
+          ? `Tor Node Online · onion ${(tor?.onion || 'starting').toLowerCase()}`
+          : tor
+            ? (tor.blocked ? `Tor stuck at ${tor.percent}%: ${tor.blocked}` : `Connecting to Tor ${tor.percent}%`)
+            : 'Starting Tor...';
 
   const messagesEndRef = useRef(null);
-  // Mirror the pinned peer key into a ref so the (stable) message listener can
-  // authenticate against the *current* value without re-subscribing.
-  const friendPubKeyRef = useRef('');
-  friendPubKeyRef.current = friendPubKey;
-
-  // Initialize Tor Node via Arti Rust Backend
-  const initializeTorNode = useCallback(async () => {
-    setConnectionStatus('Bootstrapping Tor Circuit...');
-    try {
-      const useBridges = readPref(PREF_KEYS.useBridges, 'false') === 'true';
-      const bridgeLines = useBridges ? await resolveBridgeLines() : [];
-      // Invoke the Tauri command to start Arti and launch our onion service
-      const realOnion = await invoke('start_tor_node', { useBridges, bridgeLines });
-      setMyId(realOnion);
-      if (setOnionAddress) setOnionAddress(realOnion);
-      setConnectionStatus('Tor Node Online (Deep Anonymity)');
-      showNotification('Tor circuit built successfully. Node published to DHT.', 'success');
-    } catch (e) {
-      console.error(e);
-      setConnectionStatus('Tor Connection Error');
-      showNotification('Failed to bootstrap Tor: ' + e.toString(), 'error');
-    }
-  }, [showNotification, setOnionAddress]);
-
-  useEffect(() => {
-    initializeTorNode();
-  }, [initializeTorNode]);
+  // The message listener subscribes once and reads the current identity and pinned peer key
+  // through refs, so typing in a field never re-subscribes it (which could double-deliver).
+  const latest = useRef({});
+  latest.current = { keys, passphrase, friendPubKey, showNotification };
 
   // Listen for incoming messages from Tor Circuit
   useEffect(() => {
     let unlisten;
-    const setupListener = async () => {
-      unlisten = await listen('mesh-message-received', async (event) => {
-        const rawBytes = event.payload; // encrypted bytes
+    let cancelled = false;
+    listen('mesh-message-received', async (event) => {
+      const { keys, passphrase, friendPubKey, showNotification } = latest.current;
+      const rawBytes = event.payload; // encrypted bytes
 
-        // Enforce end-to-end encryption: a message can ONLY be read after it
-        // decrypts with our private key. Plaintext is never parsed or shown.
-        if (!keys?.priv) {
-          showNotification('Encrypted message received, but no identity is loaded to decrypt it.', 'error');
-          return;
-        }
+      // Enforce end-to-end encryption: a message can ONLY be read after it
+      // decrypts with our private key. Plaintext is never parsed or shown.
+      if (!keys?.priv) {
+        showNotification('Encrypted message received, but no identity is loaded to decrypt it.', 'error');
+        return;
+      }
 
-        let plainBytes;
+      let plainBytes;
+      try {
+        plainBytes = await invoke('decrypt_message', { ciphertext: rawBytes, privKeyBytes: fromHex(keys.priv), passphrase });
+      } catch (err) {
+        console.error('Dropped undecryptable message:', err);
+        showNotification(`Dropped an incoming message: ${err}`, 'error');
+        return; // never fall back to plaintext
+      }
+
+      let payloadObj;
+      try {
+        payloadObj = JSON.parse(new TextDecoder().decode(new Uint8Array(plainBytes)));
+      } catch {
+        payloadObj = null;
+      }
+      const text = typeof payloadObj?.text === 'string' ? payloadObj.text : null;
+      const media = typeof payloadObj?.media === 'string' && SAFE_IMAGE.test(payloadObj.media) ? payloadObj.media : null;
+      if (text === null && media === null) {
+        showNotification('Dropped a malformed message.', 'error');
+        return;
+      }
+
+      // Authenticate: the signature must be valid AND from the peer key we
+      // pinned (not the key the sender embedded — that is attacker-controlled).
+      const pinned = (friendPubKey || '').replace(/\s+/g, '').toLowerCase();
+      let isVerified = false;
+      if (typeof payloadObj.signatureHex === 'string' && typeof payloadObj.pubHex === 'string') {
         try {
-          const privBytes = Array.from(keys.priv.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-          plainBytes = await invoke('decrypt_message', { ciphertext: rawBytes, privKeyBytes: privBytes, passphrase });
-        } catch (err) {
-          console.error('Dropped undecryptable message:', err);
-          showNotification('Dropped a message that was not encrypted to your key.', 'error');
-          return; // never fall back to plaintext
-        }
+          const sigOk = await invoke('verify_message', {
+            message: textBytes(text ?? media),
+            signature: fromHex(payloadObj.signatureHex),
+            pubKeyBytes: fromHex(payloadObj.pubHex),
+          });
+          const fromPinnedPeer = !!pinned && payloadObj.pubHex.toLowerCase() === pinned;
+          isVerified = sigOk && fromPinnedPeer;
+          if (sigOk && pinned && !fromPinnedPeer) {
+            showNotification('Signature is valid but NOT from your pinned peer key — possible impersonation.', 'error');
+          }
+        } catch { isVerified = false; }
+      }
 
-        let payloadObj;
-        try {
-          payloadObj = JSON.parse(new TextDecoder().decode(new Uint8Array(plainBytes)));
-        } catch {
-          showNotification('Dropped a malformed message.', 'error');
-          return;
-        }
+      setMessages(prev => [...prev, {
+        id: Date.now() + Math.random(),
+        text,
+        media,
+        type: 'received',
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        verified: isVerified
+      }]);
+      showNotification(isVerified ? 'Received a verified, encrypted message.' : 'Received an encrypted message (sender unverified).', isVerified ? 'success' : 'error');
+    }).then(fn => { if (cancelled) fn(); else unlisten = fn; });
 
-        // Authenticate: the signature must be valid AND from the peer key we
-        // pinned (not the key the sender embedded — that is attacker-controlled).
-        const pinned = (friendPubKeyRef.current || '').trim().toLowerCase();
-        let isVerified = false;
-        if (payloadObj.signatureHex && payloadObj.pubHex) {
-          try {
-            const contentBytes = Array.from(new TextEncoder().encode(payloadObj.text || payloadObj.media || ''));
-            const sigBytes = Array.from(payloadObj.signatureHex.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-            const pubBytes = Array.from(payloadObj.pubHex.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-            const sigOk = await invoke('verify_message', { message: contentBytes, signature: sigBytes, pubKeyBytes: pubBytes });
-            const fromPinnedPeer = !!pinned && payloadObj.pubHex.toLowerCase() === pinned;
-            isVerified = sigOk && fromPinnedPeer;
-            if (sigOk && pinned && !fromPinnedPeer) {
-              showNotification('Signature is valid but NOT from your pinned peer key — possible impersonation.', 'error');
-            }
-          } catch { isVerified = false; }
-        }
-
-        setMessages(prev => [...prev, {
-          id: Date.now() + Math.random(),
-          text: payloadObj.text,
-          media: payloadObj.media,
-          type: 'received',
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          verified: isVerified
-        }]);
-        showNotification(isVerified ? 'Received a verified, encrypted message.' : 'Received an encrypted message (sender unverified).', isVerified ? 'success' : 'error');
-      });
-    };
-    setupListener();
-    
     return () => {
+      cancelled = true;
       if (unlisten) unlisten();
     };
-  }, [keys, passphrase, showNotification]);
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
   useEffect(() => scrollToBottom(), [messages]);
 
-  const copyToClipboard = (text) => {
-    if (!text) return;
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    showNotification('Tor Node Address copied!', 'success');
-    setTimeout(() => setCopied(false), 2000);
+  const copyToClipboard = async (text) => {
+    if (!onionAddress) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      showNotification('Tor Node Address copied!', 'success');
+      setTimeout(() => setCopied(false), 2000);
+    } catch (e) {
+      showNotification('Could not copy: ' + e, 'error');
+    }
   };
 
   const connectToFriend = async () => {
-    if (!friendId || !friendId.endsWith('.onion')) {
+    const target = friendId.trim().toLowerCase();
+    if (!target.endsWith('.onion')) {
       showNotification('Please enter a valid Tor .onion address.', 'error');
       return;
     }
-    setConnectionStatus(`Building Tor circuit to ${friendId}...`);
+    if (target === onionAddress) {
+      showNotification("That's your own address. Enter your peer's onion address.", 'error');
+      return;
+    }
+    try {
+      if (friendPubKey.trim()) fromHex(friendPubKey, "Peer's public key");
+    } catch (e) {
+      showNotification(e.message, 'error');
+      return;
+    }
+    setConnecting(true);
     try {
       // Opens a real stream to the peer's onion service to prove it is reachable.
-      await invoke('connect_peer', { targetOnion: friendId });
+      await invoke('connect_peer', { targetOnion: target });
+      setFriendId(target);
       setConn(true);
-      setConnectionStatus('Tor Circuit Established (E2EE Active)');
       showNotification('Secure Tor Channel Established!', 'success');
     } catch (e) {
       setConn(false);
-      setConnectionStatus('Tor Node Online');
       showNotification(`Failed to connect: ${e}`, 'error');
+    } finally {
+      setConnecting(false);
     }
   };
 
   const handleDisconnect = () => {
     setConn(false);
-    setConnectionStatus('Tor Node Online');
     showNotification('Disconnected Tor circuit.', 'success');
   };
 
-  const handleSend = async (e) => {
-    if (e) e.preventDefault();
-    if (!draft.trim() || !conn) return;
-
+  // Sign `content` with our key, encrypt {content, signature, our key} to the peer, send it.
+  const sendSigned = async (field, content) => {
     // Enforce end-to-end encryption: we must have our own identity (to sign)
     // and the peer's public key (to encrypt). Hermes never sends plaintext.
     if (!keys?.priv || !keys?.pub) {
-      showNotification('Create or load an identity first — messages must be signed.', 'error');
-      return;
+      throw new Error('Create or load an identity first — messages must be signed.');
     }
     if (!friendPubKey.trim()) {
-      showNotification("Enter your peer's public key to open an encrypted channel. Hermes never sends plaintext.", 'error');
-      return;
+      throw new Error("Enter your peer's public key to open an encrypted channel. Hermes never sends plaintext.");
     }
+    // 1. Sign the plaintext with our signing subkey.
+    const sigBytes = await invoke('sign_message', { message: textBytes(content), privKeyBytes: fromHex(keys.priv), passphrase });
+    // 2. Build the signed payload, then ALWAYS encrypt it to the peer's key.
+    const payloadStr = JSON.stringify({ [field]: content, signatureHex: toHex(sigBytes), pubHex: keys.pub });
+    const payloadBytes = await invoke('encrypt_message', { message: textBytes(payloadStr), pubKeyBytes: fromHex(friendPubKey, "Peer's public key") });
+    // 3. Send only the ciphertext over the Tor stream.
+    await invoke('send_mesh_message', { targetOnion: friendId, payload: payloadBytes });
+  };
 
+  const addSent = (fields) => setMessages(prev => [...prev, {
+    id: Date.now() + Math.random(),
+    type: 'sent',
+    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    verified: true,
+    ...fields,
+  }]);
+
+  const handleSend = async (e) => {
+    if (e) e.preventDefault();
     const textToSend = draft.trim();
-
+    if (!textToSend || !conn || sending) return;
+    setSending(true);
     try {
-      // 1. Sign the plaintext with our Ed25519 signing subkey.
-      const msgBytes = Array.from(new TextEncoder().encode(textToSend));
-      const privBytes = Array.from(keys.priv.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-      const sigBytes = await invoke('sign_message', { message: msgBytes, privKeyBytes: privBytes, passphrase });
-      const signatureHex = Array.from(new Uint8Array(sigBytes)).map(b => b.toString(16).padStart(2, '0')).join('');
-
-      // 2. Build the signed payload, then ALWAYS encrypt it to the peer's key.
-      const payloadStr = JSON.stringify({ text: textToSend, signatureHex, pubHex: keys.pub });
-      const clearBytes = Array.from(new TextEncoder().encode(payloadStr));
-      const friendPubBytes = Array.from(friendPubKey.trim().match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-      const payloadBytes = await invoke('encrypt_message', { message: clearBytes, pubKeyBytes: friendPubBytes });
-
-      // 3. Send only the ciphertext over the Tor stream.
-      await invoke('send_mesh_message', { targetOnion: friendId, payload: payloadBytes });
-
-      setMessages(prev => [...prev, {
-        id: Date.now() + Math.random(),
-        text: textToSend,
-        type: 'sent',
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        verified: true
-      }]);
+      await sendSigned('text', textToSend);
+      addSent({ text: textToSend });
       setDraft('');
-    } catch (e) {
-      showNotification('Failed to send message: ' + e.toString(), 'error');
+    } catch (err) {
+      showNotification('Failed to send message: ' + (err?.message ?? err), 'error');
+    } finally {
+      setSending(false);
     }
   };
 
-  const handlePaste = async (e) => {
-    const items = e.clipboardData?.items;
-    if (!items) return;
-
-    for (let i = 0; i < items.length; i++) {
-      if (items[i].type.indexOf('image') !== -1) {
-        const blob = items[i].getAsFile();
-        const reader = new FileReader();
-        reader.onload = async (event) => {
-          const base64data = event.target.result;
-          
-          if (!conn) {
-             showNotification("Connect to a peer first to send media.", "error");
-             return;
-          }
-          // Same E2E enforcement as text: need our identity + the peer's key.
-          if (!keys?.priv || !keys?.pub) {
-            showNotification('Create or load an identity first to send signed media.', 'error');
-            return;
-          }
-          if (!friendPubKey.trim()) {
-            showNotification("Enter your peer's public key first — media is never sent in plaintext.", 'error');
-            return;
-          }
-
-          try {
-            setPastingMedia(true);
-            // 1. Sign the media payload.
-            const msgBytes = Array.from(new TextEncoder().encode(base64data));
-            const privBytes = Array.from(keys.priv.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-            const sigBytes = await invoke('sign_message', { message: msgBytes, privKeyBytes: privBytes, passphrase });
-            const signatureHex = Array.from(new Uint8Array(sigBytes)).map(b => b.toString(16).padStart(2, '0')).join('');
-
-            // 2. Build signed payload and ALWAYS encrypt it to the peer's key.
-            const payloadStr = JSON.stringify({ media: base64data, signatureHex, pubHex: keys.pub });
-            const clearBytes = Array.from(new TextEncoder().encode(payloadStr));
-            const friendPubBytes = Array.from(friendPubKey.trim().match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-            const payloadBytes = await invoke('encrypt_message', { message: clearBytes, pubKeyBytes: friendPubBytes });
-
-            await invoke('send_mesh_message', { targetOnion: friendId, payload: payloadBytes });
-            
-            // Render local
-            setMessages(prev => [...prev, {
-              id: Date.now() + Math.random(),
-              media: base64data,
-              type: 'sent',
-              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              verified: !!keys?.priv
-            }]);
-          } catch(err) {
-            showNotification('Media signing failed: ' + err, 'error');
-          } finally {
-            setPastingMedia(false);
-          }
-        };
-        reader.readAsDataURL(blob);
-      }
+  const handlePaste = (e) => {
+    const item = Array.from(e.clipboardData?.items || []).find(i => i.type.startsWith('image/'));
+    if (!item) return;
+    e.preventDefault();
+    if (!conn) {
+      showNotification('Connect to a peer first to send media.', 'error');
+      return;
     }
+    const blob = item.getAsFile();
+    if (!blob) return;
+    if (blob.size > MAX_IMAGE_BYTES) {
+      showNotification(`Image is ${(blob.size / 1048576).toFixed(1)} MB; the limit is ${MAX_IMAGE_BYTES / 1048576} MB.`, 'error');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const base64data = event.target.result;
+      if (!SAFE_IMAGE.test(base64data)) {
+        showNotification('Only PNG, JPEG, GIF and WebP images can be sent.', 'error');
+        return;
+      }
+      setSending(true);
+      try {
+        await sendSigned('media', base64data);
+        addSent({ media: base64data });
+      } catch (err) {
+        showNotification('Failed to send image: ' + (err?.message ?? err), 'error');
+      } finally {
+        setSending(false);
+      }
+    };
+    reader.readAsDataURL(blob);
   };
 
   return (
@@ -302,9 +258,12 @@ export default function SecureChat({ keys, passphrase, showNotification, onionAd
             <div title={myId} style={{ flex: 1, minWidth: 0, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', fontSize: '13px', lineHeight: 1.5, wordBreak: 'break-all', overflowWrap: 'anywhere' }}>
               {myId}
             </div>
-            <button onClick={() => copyToClipboard(myId)} title="Copy onion address" style={{ flex: 'none', background: 'var(--tint-strong)', border: 'none', color: 'var(--text-primary)', padding: '5px 10px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', fontWeight: 500 }}>
+            <button onClick={() => copyToClipboard(onionAddress)} disabled={!onionAddress} title="Copy onion address" style={{ flex: 'none', background: 'var(--tint-strong)', border: 'none', color: 'var(--text-primary)', padding: '5px 10px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', fontWeight: 500 }}>
               {copied ? <Check size={13} color="var(--success)"/> : <Copy size={13}/>}
               {copied ? 'Copied' : 'Copy'}
+            </button>
+            <button onClick={onCopyPublicKey} disabled={!keys?.pub} title={keys?.pub ? 'Copy your public key for your peer' : 'Create or load an identity first'} style={{ flex: 'none', background: 'var(--tint-strong)', border: 'none', color: 'var(--text-primary)', padding: '5px 10px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', fontWeight: 500 }}>
+              <Key size={13}/> Copy Public Key
             </button>
           </div>
         </div>
@@ -319,15 +278,15 @@ export default function SecureChat({ keys, passphrase, showNotification, onionAd
               value={friendId}
               onChange={e => setFriendId(e.target.value.trim())}
               placeholder="Peer's address (…xyz.onion)"
-              disabled={conn}
+              disabled={conn || connecting}
               spellCheck={false}
               style={{ flex: '2 1 280px', minWidth: 0, background: 'var(--surface-2)', border: '1px solid var(--panel-border)', color: 'var(--text-primary)', padding: '8px 10px', borderRadius: '6px', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
             />
             <input
               value={friendPubKey}
               onChange={e => setFriendPubKey(e.target.value)}
-              placeholder="Friend's PGP PubKey (Hex)"
-              disabled={conn}
+              placeholder="Peer's PGP public key (hex)"
+              disabled={conn || connecting}
               spellCheck={false}
               style={{ flex: '1 1 200px', minWidth: 0, background: 'var(--surface-2)', border: '1px solid var(--panel-border)', color: 'var(--text-primary)', padding: '8px 10px', borderRadius: '6px', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
             />
@@ -336,8 +295,8 @@ export default function SecureChat({ keys, passphrase, showNotification, onionAd
                 <WifiOff size={13}/> Disconnect
               </button>
             ) : (
-              <button onClick={connectToFriend} style={{ flex: 'none', padding: '8px 16px', background: 'var(--accent)', color: 'var(--on-accent)', border: 'none', borderRadius: '6px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <Wifi size={13}/> Connect
+              <button onClick={connectToFriend} disabled={!torOnline || connecting} title={torOnline ? 'Open a Tor circuit to the peer' : 'Wait until Tor is online'} style={{ flex: 'none', padding: '8px 16px', background: 'var(--accent)', color: 'var(--on-accent)', border: 'none', borderRadius: '6px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', opacity: (!torOnline || connecting) ? 0.6 : 1 }}>
+                <Wifi size={13}/> {connecting ? 'Connecting...' : 'Connect'}
               </button>
             )}
           </div>
@@ -361,9 +320,9 @@ export default function SecureChat({ keys, passphrase, showNotification, onionAd
             </span>
             {connectionStatus.includes('Error') && (
               <button 
-                onClick={initializeTorNode}
+                onClick={onRetryTor}
                 style={{ background: 'var(--tint)', border: '1px solid var(--panel-border)', color: 'var(--text-primary)', padding: '3px 8px', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}
-                title="Retry Tor connection"
+                title={torError || 'Retry Tor connection'}
               >
                 <RefreshCw size={11} /> Retry
               </button>
@@ -378,8 +337,8 @@ export default function SecureChat({ keys, passphrase, showNotification, onionAd
           {messages.length === 0 ? (
             <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
               <Globe size={32} opacity={0.3}/>
-              <p>Mesh network initialized. Absolute zero IP leaks.</p>
-              <p style={{ fontSize: '11px', opacity: 0.7 }}>Connect with a peer using their real Tor Onion Link.</p>
+              <p>{torOnline ? 'Your onion service is running.' : 'Waiting for the Tor connection...'}</p>
+              <p style={{ fontSize: '11px', opacity: 0.7 }}>Swap onion addresses and public keys with your peer, then Connect.</p>
             </div>
           ) : (
             messages.map(msg => (
@@ -408,11 +367,11 @@ export default function SecureChat({ keys, passphrase, showNotification, onionAd
             value={draft}
             onChange={e => setDraft(e.target.value)}
             onPaste={handlePaste}
-            disabled={!conn || pastingMedia}
+            disabled={!conn || sending}
             style={{ flex: 1, background: 'var(--surface-2)', border: '1px solid var(--panel-border)', color: 'var(--text-primary)', padding: '10px 14px', borderRadius: '8px', fontSize: '14px' }}
           />
-          <button type="submit" disabled={!conn || (!draft.trim() && !pastingMedia)} style={{ padding: '0 20px', background: (conn && draft.trim()) ? 'var(--accent)' : 'var(--tint-strong)', color: (conn && draft.trim()) ? 'var(--on-accent)' : 'var(--text-secondary)', border: 'none', borderRadius: '8px', cursor: (conn && draft.trim()) ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            {pastingMedia ? "Processing..." : <><Send size={15}/> Send</>}
+          <button type="submit" disabled={!conn || sending || !draft.trim()} style={{ padding: '0 20px', background: (conn && draft.trim()) ? 'var(--accent)' : 'var(--tint-strong)', color: (conn && draft.trim()) ? 'var(--on-accent)' : 'var(--text-secondary)', border: 'none', borderRadius: '8px', cursor: (conn && draft.trim()) ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            {sending ? "Sending..." : <><Send size={15}/> Send</>}
           </button>
         </form>
 

@@ -5,14 +5,21 @@
 // It comes from Tor Project's Tor Expert Bundle at a pinned version, and every download is
 // checked against the SHA-256 published in that release's GPG-signed sha256sums-signed-build.txt.
 //
-//   node scripts/fetch-sidecars.mjs                 # the host's target (runs before `npm run tauri`)
+//   node scripts/fetch-sidecars.mjs                 # the host's target (runs before `tauri build`)
 //   node scripts/fetch-sidecars.mjs --target <triple>
 //   node scripts/fetch-sidecars.mjs --all           # every supported target
+//   node scripts/fetch-sidecars.mjs --allow-missing # never fail (runs before `npm run tauri dev`)
+//
+// --allow-missing leaves an empty placeholder when the download fails (say dist.torproject.org is
+// blocked), so a dev build still starts; Hermes then reports bridges as unavailable. Release builds
+// run without it and fail instead of shipping the placeholder.
 //
 // To bump TOR_VERSION: download sha256sums-signed-build.txt and its .asc from
 // https://dist.torproject.org/torbrowser/<version>/, verify the signature against the Tor Browser
 // Developers key (fingerprint EF6E 286D DA85 EA2A 4BA7  DE68 4E2C 6E87 9329 8290), copy the
 // tor-expert-bundle hashes into TARGETS, then run with --all and update the `lyrebird` hashes.
+// Also copy the obfs4 and snowflake lines from the bundle's tor/pluggable_transports/pt_config.json
+// into BUILTIN_OBFS4 / BUILTIN_SNOWFLAKE in aura/src/mesh_engine.rs.
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -41,10 +48,26 @@ const TARGETS = {
     bundle: 'e9dc6ccc93cd6afa507193f4de284d6424233ff5102155cd2c94b259e8a22b65',
     lyrebird: '6e218e85f9a7ae2481f5402ded822471a9a9d0c7e66b05db3842b93fa5c1f02e',
   },
+  // ARM64 Windows has no native build; the x86_64 one runs under Windows' built-in emulation.
+  'aarch64-pc-windows-msvc': {
+    platform: 'windows-x86_64',
+    bundle: 'e9dc6ccc93cd6afa507193f4de284d6424233ff5102155cd2c94b259e8a22b65',
+    lyrebird: '6e218e85f9a7ae2481f5402ded822471a9a9d0c7e66b05db3842b93fa5c1f02e',
+  },
+  'i686-pc-windows-msvc': {
+    platform: 'windows-i686',
+    bundle: '7c2755b09876ebc6c2e2d2d1d3279b2be3e9beec35ff0ca2e7df4c1abcad1ae4',
+    lyrebird: 'cf0e1263caf37064ee6f8f0f5f77094e048f80ac97fe512a24365e69e7623480',
+  },
   'x86_64-unknown-linux-gnu': {
     platform: 'linux-x86_64',
     bundle: '8e012ec6815d7899cb64011582e2dade88e74119c6661068a2a3252de0ccd7f2',
     lyrebird: 'ee13ec155cf9b131a3e1b87bd6d697a10c42d04f2eaaeab6b1590c9971d41421',
+  },
+  'i686-unknown-linux-gnu': {
+    platform: 'linux-i686',
+    bundle: '7537fea3478d05b8af25d7f8199c031b281f7015c32bb4177bef71f8e5100d9b',
+    lyrebird: '28d2217cce7cc351250ccca6000e9616da6d61ee37e9cd1224ef3a40d1dd0d5c',
   },
 };
 const UNIVERSAL_MAC = 'universal-apple-darwin';
@@ -101,7 +124,7 @@ async function fetchTarget(triple) {
   const file = `tor-expert-bundle-${target.platform}-${TOR_VERSION}.tar.gz`;
   const url = `https://dist.torproject.org/torbrowser/${TOR_VERSION}/${file}`;
   console.log(`[sidecars] downloading ${url}`);
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(180_000) });
   if (!res.ok) throw new Error(`download failed: HTTP ${res.status} for ${url}`);
   const archive = Buffer.from(await res.arrayBuffer());
 
@@ -137,8 +160,20 @@ async function fetchUniversalMac() {
   console.log(`[sidecars] installed ${sidecarPath(UNIVERSAL_MAC)}`);
 }
 
+// Lets `tauri dev` start without lyrebird; see --allow-missing above.
+function writePlaceholder(triple, err) {
+  const dest = sidecarPath(triple);
+  console.warn(`[sidecars] WARNING: could not fetch lyrebird for ${triple}: ${err.message}`);
+  console.warn('[sidecars] Continuing without it. Direct Tor connections work; bridges (Snowflake, obfs4) will not.');
+  console.warn('[sidecars] Run `npm run sidecars` on a network that can reach dist.torproject.org to fix this.');
+  mkdirSync(BIN_DIR, { recursive: true });
+  if (!existsSync(dest)) writeFileSync(dest, '');
+  if (!existsSync(LICENSE_PATH)) writeFileSync(LICENSE_PATH, '');
+}
+
 async function main() {
   const args = process.argv.slice(2);
+  const allowMissing = args.includes('--allow-missing');
   const targetFlag = args.indexOf('--target');
   let triples;
   if (args.includes('--all')) {
@@ -151,9 +186,14 @@ async function main() {
   }
 
   for (const triple of triples) {
-    if (triple === UNIVERSAL_MAC) await fetchUniversalMac();
-    else if (TARGETS[triple]) await fetchTarget(triple);
-    else throw new Error(`no lyrebird build for ${triple}; supported: ${[...Object.keys(TARGETS), UNIVERSAL_MAC].join(', ')}`);
+    try {
+      if (triple === UNIVERSAL_MAC) await fetchUniversalMac();
+      else if (TARGETS[triple]) await fetchTarget(triple);
+      else throw new Error(`no lyrebird build for ${triple}; supported: ${[...Object.keys(TARGETS), UNIVERSAL_MAC].join(', ')}`);
+    } catch (e) {
+      if (!allowMissing) throw e;
+      writePlaceholder(triple, e);
+    }
   }
 }
 

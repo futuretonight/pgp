@@ -1,43 +1,45 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Settings as SettingsIcon, Shield, Cpu, Lock, Key, Server, Hash, Palette, Check, Globe, Snowflake } from 'lucide-react';
+import { Settings as SettingsIcon, Cpu, Key, Server, Palette, Check, Globe, RefreshCw } from 'lucide-react';
 import { THEMES } from '../themes';
-import { PREF_KEYS, readPref, writePref } from '../prefs';
+import { PREF_KEYS, readPref, writePref, builtinBridgeType } from '../prefs';
 
 const boxStyle = { background: 'var(--inset)', padding: '1.25rem', borderRadius: '8px', border: '1px solid var(--panel-border)' };
 const fieldStyle = { background: 'var(--surface-2)', border: '1px solid var(--panel-border)', color: 'var(--text-primary)', padding: '10px', borderRadius: '6px' };
 const toggleStyle = { accentColor: 'var(--accent)', width: '18px', height: '18px' };
 
-export default function Settings({ keepAlive, setKeepAlive, theme, setTheme }) {
+export default function Settings({ keepAlive, setKeepAlive, theme, setTheme, onReconnectTor, torPhase }) {
   const [algo, setAlgo] = useState(() => readPref(PREF_KEYS.algo, 'ecc'));
-  const [cipher, setCipher] = useState(() => readPref(PREF_KEYS.cipher, 'aes'));
-  const [v3Only, setV3Only] = useState(() => readPref(PREF_KEYS.v3Only, 'true') !== 'false');
   const [useBridges, setUseBridges] = useState(() => readPref(PREF_KEYS.useBridges, 'false') === 'true');
-  const [bridgeType, setBridgeType] = useState(() => readPref(PREF_KEYS.bridgeType, 'obfs4'));
+  const [bridgeType, setBridgeType] = useState(builtinBridgeType);
   const [bridgeSource, setBridgeSource] = useState(() => readPref(PREF_KEYS.bridgeSource, 'builtin'));
   const [bridgeString, setBridgeString] = useState(() => readPref(PREF_KEYS.bridgeString, ''));
   const [requestedBridges, setRequestedBridges] = useState(() => readPref(PREF_KEYS.requestedBridges, ''));
   const [requestStatus, setRequestStatus] = useState('');
-  const [volunteerProxy, setVolunteerProxy] = useState(() => readPref(PREF_KEYS.volunteer, 'false') === 'true');
+  const [autoFallback, setAutoFallback] = useState(() => readPref(PREF_KEYS.autoFallback, 'true') !== 'false');
+  const [dirty, setDirty] = useState(false);
+  // Any connection setting change can be applied without restarting.
+  const changed = (setter) => (value) => { setter(value); setDirty(true); };
 
   useEffect(() => {
     writePref(PREF_KEYS.algo, algo);
-    writePref(PREF_KEYS.cipher, cipher);
-    writePref(PREF_KEYS.v3Only, v3Only);
     writePref(PREF_KEYS.useBridges, useBridges);
     writePref(PREF_KEYS.bridgeType, bridgeType);
     writePref(PREF_KEYS.bridgeSource, bridgeSource);
     writePref(PREF_KEYS.bridgeString, bridgeString);
     writePref(PREF_KEYS.requestedBridges, requestedBridges);
-    writePref(PREF_KEYS.volunteer, volunteerProxy);
-  }, [algo, cipher, v3Only, useBridges, bridgeType, bridgeSource, bridgeString, requestedBridges, volunteerProxy]);
+    writePref(PREF_KEYS.autoFallback, autoFallback);
+  }, [algo, useBridges, bridgeType, bridgeSource, bridgeString, requestedBridges, autoFallback]);
 
   const handleRequestBridges = async () => {
     setRequestStatus('Contacting bridges.torproject.org...');
     try {
-      const bridges = await invoke('request_bridges', { transport: null });
+      // "bridgedb" bridges are handed out a few at a time, so they are less likely to be blocked
+      // than the public built-in ones.
+      const bridges = await invoke('request_bridges', { transport: null, source: 'bridgedb' });
       setRequestedBridges(bridges);
-      setRequestStatus('');
+      setDirty(true);
+      setRequestStatus(`Received ${bridges.split('\n').length} bridges.`);
     } catch (e) {
       setRequestStatus('Request failed: ' + e);
     }
@@ -159,11 +161,11 @@ export default function Settings({ keepAlive, setKeepAlive, theme, setTheme }) {
             </div>
 
             <div className="input-group">
-              <label>Symmetric File Encryption Cipher</label>
-              <select value={cipher} onChange={e => setCipher(e.target.value)} style={fieldStyle}>
-                <option value="aes">AES-256-GCM (Hardware Accelerated)</option>
-                <option value="xchacha">XChaCha20-Poly1305</option>
-              </select>
+              <label>Symmetric Cipher</label>
+              <input type="text" value="AES-256 (OpenPGP, chosen by Sequoia)" disabled style={{ ...fieldStyle, opacity: 0.7 }} />
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+                Messages and files use the OpenPGP standard, so the cipher is negotiated from the recipient's key.
+              </span>
             </div>
 
           </div>
@@ -178,21 +180,21 @@ export default function Settings({ keepAlive, setKeepAlive, theme, setTheme }) {
             
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
               <div>
-                <strong style={{ display: 'block', marginBottom: '0.25rem' }}>Force V3 Onion Services Only</strong>
+                <strong style={{ display: 'block', marginBottom: '0.25rem' }}>V3 Onion Services Only</strong>
                 <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                  Reject legacy V2 connections. V3 provides better cryptography and longer addresses.
+                  Always on: the embedded Arti client only supports v3 onion services (56-character addresses).
                 </span>
               </div>
-              <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
-                <input type="checkbox" checked={v3Only} onChange={e => setV3Only(e.target.checked)} style={toggleStyle} />
+              <label style={{ display: 'flex', alignItems: 'center', cursor: 'default' }}>
+                <input type="checkbox" checked readOnly style={toggleStyle} />
               </label>
             </div>
 
             <div className="input-group">
-              <label>Local Proxy Bind Port</label>
-              <input type="text" value="Random (Ephemeral)" disabled style={{ ...fieldStyle, opacity: 0.7 }} />
+              <label>Local Proxy Port</label>
+              <input type="text" value="None (Tor runs inside Hermes)" disabled style={{ ...fieldStyle, opacity: 0.7 }} />
               <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-                The internal Tor client dynamically assigns ports to prevent fingerprinting.
+                Hermes embeds Tor, so no SOCKS port is opened for other programs to use.
               </span>
             </div>
 
@@ -208,15 +210,14 @@ export default function Settings({ keepAlive, setKeepAlive, theme, setTheme }) {
 
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', marginBottom: '1.25rem' }}>
               <div>
-                <strong style={{ display: 'block', marginBottom: '0.25rem' }}>Use Tor Bridges (obfs4 / Snowflake / meek)</strong>
+                <strong style={{ display: 'block', marginBottom: '0.25rem' }}>Use Tor Bridges (obfs4 / Snowflake / webtunnel)</strong>
                 <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                  Bypass national firewalls by disguising Tor traffic as regular HTTPS or WebRTC video calls.
-                  Needs the lyrebird transport from Tor Browser (or obfs4proxy / snowflake-client on your PATH).
-                  Takes effect the next time Hermes starts.
+                  Bypass campus and national firewalls by disguising Tor traffic as regular HTTPS or WebRTC video calls.
+                  Uses the lyrebird transport that ships with Hermes.
                 </span>
               </div>
               <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
-                <input type="checkbox" checked={useBridges} onChange={e => setUseBridges(e.target.checked)} style={toggleStyle} />
+                <input type="checkbox" checked={useBridges} onChange={e => changed(setUseBridges)(e.target.checked)} style={toggleStyle} />
               </label>
             </div>
 
@@ -225,18 +226,17 @@ export default function Settings({ keepAlive, setKeepAlive, theme, setTheme }) {
 
                 {/* Option 1: Built-in */}
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer', fontSize: 'inherit', fontWeight: 'inherit' }}>
-                  <input type="radio" name="bridgeSource" checked={bridgeSource === 'builtin'} onChange={() => setBridgeSource('builtin')} style={{ accentColor: 'var(--accent)' }} />
+                  <input type="radio" name="bridgeSource" checked={bridgeSource === 'builtin'} onChange={() => changed(setBridgeSource)('builtin')} style={{ accentColor: 'var(--accent)' }} />
                   <span style={{ flex: 1, ...optionLabel(bridgeSource === 'builtin') }}>Select a built-in bridge</span>
-                  <select value={bridgeType} onChange={e => setBridgeType(e.target.value)} disabled={bridgeSource !== 'builtin'} style={{ ...fieldStyle, padding: '6px 10px', width: '200px' }}>
+                  <select value={bridgeType} onChange={e => changed(setBridgeType)(e.target.value)} disabled={bridgeSource !== 'builtin'} style={{ ...fieldStyle, padding: '6px 10px', width: '200px' }}>
+                    <option value="snowflake">Snowflake (best when Tor is blocked)</option>
                     <option value="obfs4">obfs4</option>
-                    <option value="snowflake">Snowflake</option>
-                    <option value="meek">meek</option>
                   </select>
                 </label>
 
                 {/* Option 2: Request */}
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
-                  <input type="radio" name="bridgeSource" aria-label="Request a bridge from torproject.org" checked={bridgeSource === 'request'} onChange={() => setBridgeSource('request')} style={{ marginTop: '0.25rem', accentColor: 'var(--accent)' }} />
+                  <input type="radio" name="bridgeSource" aria-label="Request a bridge from torproject.org" checked={bridgeSource === 'request'} onChange={() => changed(setBridgeSource)('request')} style={{ marginTop: '0.25rem', accentColor: 'var(--accent)' }} />
                   <div style={{ flex: 1 }}>
                     <span style={{ display: 'block', marginBottom: '0.6rem', ...optionLabel(bridgeSource === 'request') }}>Request a bridge from torproject.org</span>
                     <textarea
@@ -259,7 +259,7 @@ export default function Settings({ keepAlive, setKeepAlive, theme, setTheme }) {
 
                 {/* Option 3: Provide */}
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
-                  <input type="radio" name="bridgeSource" aria-label="Provide a bridge" checked={bridgeSource === 'provide'} onChange={() => setBridgeSource('provide')} style={{ marginTop: '0.25rem', accentColor: 'var(--accent)' }} />
+                  <input type="radio" name="bridgeSource" aria-label="Provide a bridge" checked={bridgeSource === 'provide'} onChange={() => changed(setBridgeSource)('provide')} style={{ marginTop: '0.25rem', accentColor: 'var(--accent)' }} />
                   <div style={{ flex: 1 }}>
                     <span style={{ display: 'block', marginBottom: '0.25rem', ...optionLabel(bridgeSource === 'provide') }}>Provide a bridge</span>
                     <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.6rem' }}>
@@ -267,7 +267,7 @@ export default function Settings({ keepAlive, setKeepAlive, theme, setTheme }) {
                     </span>
                     <textarea
                       value={bridgeString}
-                      onChange={e => setBridgeString(e.target.value)}
+                      onChange={e => changed(setBridgeString)(e.target.value)}
                       disabled={bridgeSource !== 'provide'}
                       placeholder="obfs4 1.2.3.4:443 FINGERPRINT cert=... iat-mode=0"
                       style={{ ...fieldStyle, width: '100%', minHeight: '70px', resize: 'vertical', fontSize: '0.8rem', fontFamily: 'var(--font-mono)' }}
@@ -280,25 +280,27 @@ export default function Settings({ keepAlive, setKeepAlive, theme, setTheme }) {
 
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', borderTop: '1px solid var(--panel-border)', paddingTop: '1.25rem' }}>
               <div>
-                <strong style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.25rem' }}>
-                  <Snowflake size={15} color="var(--accent)"/> Volunteer Snowflake Proxy
-                </strong>
+                <strong style={{ display: 'block', marginBottom: '0.25rem' }}>Switch to Snowflake automatically if Tor is blocked</strong>
                 <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                  Help users in censored countries connect to the Tor network by routing their traffic through your node.
+                  When bridges are off and a direct connection makes no progress for 45 seconds (common on campus
+                  and workplace networks), Hermes retries through the built-in Snowflake bridges.
                 </span>
               </div>
               <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={volunteerProxy}
-                  onChange={e => {
-                    const checked = e.target.checked;
-                    setVolunteerProxy(checked);
-                    invoke('set_snowflake_proxy', { enabled: checked }).catch(console.error);
-                  }}
-                  style={toggleStyle}
-                />
+                <input type="checkbox" checked={autoFallback} onChange={e => changed(setAutoFallback)(e.target.checked)} style={toggleStyle} />
               </label>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '1.25rem' }}>
+              <button
+                onClick={() => { setDirty(false); onReconnectTor(); }}
+                disabled={torPhase === 'starting'}
+                style={{ padding: '8px 16px', fontSize: '0.85rem', opacity: torPhase === 'starting' ? 0.6 : 1 }}>
+                <RefreshCw size={14}/> {torPhase === 'starting' ? 'Connecting...' : 'Apply & Reconnect'}
+              </button>
+              <span style={{ fontSize: '0.75rem', color: dirty ? 'var(--warn)' : 'var(--text-secondary)' }}>
+                {dirty ? 'Connection settings changed. Apply them to reconnect now.' : 'Changes apply to new Tor circuits; existing ones are kept.'}
+              </span>
             </div>
 
           </div>

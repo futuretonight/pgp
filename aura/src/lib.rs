@@ -3,7 +3,7 @@ use sequoia_openpgp::cert::prelude::*;
 use sequoia_openpgp::crypto::Password;
 use sequoia_openpgp::serialize::SerializeInto;
 use std::path::Path;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 pub mod mesh_engine;
 
@@ -82,7 +82,7 @@ pub struct Identity {
     pub private_key: PrivateKey,
 }
 
-/// Creates a new OpenPGP identity (Ed25519/X25519)
+/// Creates a new OpenPGP identity, its secret keys protected by `passphrase`.
 /// Returns a new Identity struct containing the private and public keys.
 /// `algo` selects the key suite: "rsa" (RSA-4096), "nist" (NIST P-384), anything else Cv25519.
 pub fn create_identity(passphrase: &str, user_id: &str, algo: &str) -> Result<Identity> {
@@ -119,11 +119,13 @@ pub fn encrypt_file(in_path: &Path, out_path: &Path, recipients_pubkeys: &[Publi
     use sequoia_openpgp::policy::StandardPolicy;
     use std::fs::File;
 
+    ensure_distinct(in_path, out_path)?;
     let p = &StandardPolicy::new();
     let mut certs = Vec::new();
     for pk in recipients_pubkeys {
         certs.push(Cert::from_bytes(&pk.bytes)?);
     }
+    let mut in_file = File::open(in_path)?;
 
     let mut sink = File::create(out_path)?;
     let message = Message::new(&mut sink);
@@ -135,12 +137,62 @@ pub fn encrypt_file(in_path: &Path, out_path: &Path, recipients_pubkeys: &[Publi
         }
     }
 
+    if recipients.is_empty() {
+        anyhow::bail!("The recipient key has no usable encryption subkey");
+    }
     let message = Encryptor::for_recipients(message, recipients).build()?;
     let mut writer = LiteralWriter::new(message).build()?;
-    let mut in_file = File::open(in_path)?;
     std::io::copy(&mut in_file, &mut writer)?;
     writer.finalize()?;
 
+    Ok(())
+}
+
+enum KeyUse {
+    Sign,
+    Decrypt,
+}
+
+/// Find the secret subkey for `usage` and unlock it with `passphrase` (ignored for unprotected keys).
+fn unlock_keypair(private_key: &PrivateKey, passphrase: &str, usage: KeyUse) -> Result<sequoia_openpgp::crypto::KeyPair> {
+    use sequoia_openpgp::cert::Cert;
+    use sequoia_openpgp::parse::Parse;
+    use sequoia_openpgp::policy::StandardPolicy;
+
+    let p = &StandardPolicy::new();
+    let cert = Cert::from_bytes(&private_key.bytes)?;
+    let keys = cert.keys().with_policy(p, None).secret().supported();
+    let candidates: Vec<_> = match usage {
+        KeyUse::Sign => keys.for_signing().collect(),
+        KeyUse::Decrypt => keys.for_transport_encryption().collect(),
+    };
+    for ka in candidates {
+        let mut key = ka.key().clone();
+        if key.secret().is_encrypted() {
+            let key_ref = key.clone();
+            key.secret_mut()
+                .decrypt_in_place(&key_ref, &Password::from(passphrase))
+                .map_err(|_| anyhow::anyhow!("Wrong passphrase for this identity's private key"))?;
+        }
+        if let Ok(kp) = key.into_keypair() {
+            return Ok(kp);
+        }
+    }
+    match usage {
+        KeyUse::Sign => anyhow::bail!("This identity has no usable signing key"),
+        KeyUse::Decrypt => anyhow::bail!("This identity has no usable decryption key"),
+    }
+}
+
+/// Refuse to read and write the same file: creating the output would truncate the input first.
+fn ensure_distinct(in_path: &Path, out_path: &Path) -> Result<()> {
+    let same = match (in_path.canonicalize(), out_path.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => in_path == out_path,
+    };
+    if same {
+        anyhow::bail!("Input and output must be different files");
+    }
     Ok(())
 }
 
@@ -158,11 +210,12 @@ impl sequoia_openpgp::parse::stream::DecryptionHelper for DecryptHelper {
     ) -> sequoia_openpgp::Result<Option<sequoia_openpgp::cert::Cert>> {
         for pkesk in pkesks {
             if let Some((algo, session_key)) = pkesk.decrypt(&mut self.keypair, sym_algo) {
-                decrypt(algo, &session_key);
-                return Ok(None);
+                if decrypt(algo, &session_key) {
+                    return Ok(None);
+                }
             }
         }
-        anyhow::bail!("Failed to decrypt")
+        anyhow::bail!("This message was not encrypted to your key")
     }
 }
 
@@ -199,6 +252,9 @@ pub fn encrypt_message(payload: &[u8], recipients_pubkeys: &[PublicKey]) -> Resu
         }
     }
 
+    if recipients.is_empty() {
+        anyhow::bail!("The recipient key has no usable encryption subkey");
+    }
     let message = Encryptor::for_recipients(message, recipients).build()?;
     let mut writer = LiteralWriter::new(message).build()?;
     std::io::copy(&mut std::io::Cursor::new(payload), &mut writer)?;
@@ -210,28 +266,11 @@ pub fn encrypt_message(payload: &[u8], recipients_pubkeys: &[PublicKey]) -> Resu
 /// Decrypts an in-memory message using a private key.
 pub fn decrypt_message(payload: &[u8], private_key: &PrivateKey, passphrase: &str) -> Result<Vec<u8>> {
     use sequoia_openpgp::parse::stream::DecryptorBuilder;
-    use sequoia_openpgp::cert::Cert;
     use sequoia_openpgp::parse::Parse;
     use sequoia_openpgp::policy::StandardPolicy;
-    use sequoia_openpgp::crypto::Password;
 
     let p = &StandardPolicy::new();
-    let cert = Cert::from_bytes(&private_key.bytes)?;
-
-    let mut keypair = None;
-    for ka in cert.keys().with_policy(p, None).secret().supported().for_transport_encryption() {
-        let mut key = ka.key().clone();
-        if key.secret().is_encrypted() {
-            let key_ref = key.clone();
-            key.secret_mut().decrypt_in_place(&key_ref, &Password::from(passphrase)).map_err(|e| anyhow::anyhow!("Decryption failed: {}", e))?;
-        }
-        if let Ok(kp) = key.into_keypair() {
-            keypair = Some(kp);
-            break;
-        }
-    }
-
-    let keypair = keypair.ok_or_else(|| anyhow::anyhow!("No suitable decryption key found"))?;
+    let keypair = unlock_keypair(private_key, passphrase, KeyUse::Decrypt)?;
     let helper = DecryptHelper { keypair };
 
     let mut decryptor = DecryptorBuilder::from_bytes(payload)?.with_policy(p, None, helper)?;
@@ -245,36 +284,26 @@ pub fn decrypt_message(payload: &[u8], private_key: &PrivateKey, passphrase: &st
 /// Decrypts a file at `in_path` using a private key, writes plaintext to `out_path`.
 pub fn decrypt_file(in_path: &Path, out_path: &Path, private_key: &PrivateKey, passphrase: &str) -> Result<()> {
     use sequoia_openpgp::parse::stream::DecryptorBuilder;
-    use sequoia_openpgp::cert::Cert;
     use sequoia_openpgp::parse::Parse;
     use sequoia_openpgp::policy::StandardPolicy;
-    use sequoia_openpgp::crypto::Password;
     use std::fs::File;
 
+    ensure_distinct(in_path, out_path)?;
+
     let p = &StandardPolicy::new();
-    let cert = Cert::from_bytes(&private_key.bytes)?;
-
-    let mut keypair = None;
-    for ka in cert.keys().with_policy(p, None).secret().supported().for_transport_encryption() {
-        let mut key = ka.key().clone();
-        if key.secret().is_encrypted() {
-            let key_ref = key.clone();
-            key.secret_mut().decrypt_in_place(&key_ref, &Password::from(passphrase)).map_err(|e| anyhow::anyhow!("Decryption failed: {}", e))?;
-        }
-        if let Ok(kp) = key.into_keypair() {
-            keypair = Some(kp);
-            break;
-        }
-    }
-
-    let keypair = keypair.ok_or_else(|| anyhow::anyhow!("No suitable decryption key found"))?;
+    let keypair = unlock_keypair(private_key, passphrase, KeyUse::Decrypt)?;
     let helper = DecryptHelper { keypair };
 
     let in_file = File::open(in_path)?;
     let mut decryptor = DecryptorBuilder::from_reader(in_file)?.with_policy(p, None, helper)?;
 
     let mut out_file = File::create(out_path)?;
-    std::io::copy(&mut decryptor, &mut out_file)?;
+    if let Err(e) = std::io::copy(&mut decryptor, &mut out_file) {
+        // Never leave unauthenticated partial plaintext behind.
+        drop(out_file);
+        let _ = std::fs::remove_file(out_path);
+        return Err(e.into());
+    }
 
     Ok(())
 }
@@ -283,28 +312,9 @@ pub fn decrypt_file(in_path: &Path, out_path: &Path, private_key: &PrivateKey, p
 /// Signs a message (or file) with a private key. Returns signature bytes.
 pub fn sign_message(message: &[u8], private_key: &PrivateKey, passphrase: &str) -> Result<Vec<u8>> {
     use sequoia_openpgp::serialize::stream::{Message, Signer};
-    use sequoia_openpgp::cert::Cert;
-    use sequoia_openpgp::parse::Parse;
-    use sequoia_openpgp::policy::StandardPolicy;
-    use sequoia_openpgp::crypto::Password;
     use std::io::Write;
 
-    let p = &StandardPolicy::new();
-    let cert = Cert::from_bytes(&private_key.bytes)?;
-
-    let mut keypair = None;
-    for ka in cert.keys().with_policy(p, None).secret().supported().for_signing() {
-        let mut key = ka.key().clone();
-        if key.secret().is_encrypted() {
-            let key_ref = key.clone();
-            key.secret_mut().decrypt_in_place(&key_ref, &Password::from(passphrase)).map_err(|e| anyhow::anyhow!("Signing decryption failed: {}", e))?;
-        }
-        if let Ok(kp) = key.into_keypair() {
-            keypair = Some(kp);
-            break;
-        }
-    }
-    let keypair = keypair.ok_or_else(|| anyhow::anyhow!("No suitable signing key found"))?;
+    let keypair = unlock_keypair(private_key, passphrase, KeyUse::Sign)?;
 
     let mut sink = Vec::new();
     {
@@ -381,20 +391,6 @@ pub fn start_temporary_chat() -> Result<Identity> {
     })
 }
 
-/// Initializes or unlocks the in-memory KDBX vault (using keepass-rs).
-pub fn unlock_vault(kdbx_bytes: &[u8], passphrase: &str) -> Result<()> {
-    use keepass::{Database, DatabaseKey};
-    use std::io::Cursor;
-
-    let key = DatabaseKey::new().with_password(passphrase);
-    let mut cursor = Cursor::new(kdbx_bytes);
-    
-    // Parses and decrypts the KDBX file, validating its integrity and ChaCha20/Argon2 params.
-    let _db = Database::open(&mut cursor, key)?;
-    
-    Ok(())
-}
-
 use argon2::Argon2;
 use chacha20poly1305::{
     aead::{Aead, KeyInit},
@@ -402,9 +398,13 @@ use chacha20poly1305::{
 };
 use rand::Rng;
 
+/// Vault file layout: 16-byte Argon2id salt, 24-byte XChaCha20 nonce, then the ciphertext of
+/// `u32 LE len | public key | u32 LE len | private key`.
 pub fn save_identity_to_vault(identity: &Identity, passphrase: &str, path: &Path) -> Result<()> {
+    use std::io::Write;
+
     // 1. Serialize the identity
-    let mut data = Vec::new();
+    let mut data = Zeroizing::new(Vec::new());
     data.extend_from_slice(&(identity.public_key.bytes.len() as u32).to_le_bytes());
     data.extend_from_slice(&identity.public_key.bytes);
     data.extend_from_slice(&(identity.private_key.bytes.len() as u32).to_le_bytes());
@@ -413,32 +413,48 @@ pub fn save_identity_to_vault(identity: &Identity, passphrase: &str, path: &Path
     // 2. Derive key using Argon2
     let mut salt_bytes = [0u8; 16];
     rand::thread_rng().fill(&mut salt_bytes);
-    
-    let mut key_bytes = [0u8; 32];
-    Argon2::default().hash_password_into(passphrase.as_bytes(), &salt_bytes, &mut key_bytes)
+
+    let mut key_bytes = Zeroizing::new([0u8; 32]);
+    Argon2::default().hash_password_into(passphrase.as_bytes(), &salt_bytes, &mut *key_bytes)
         .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
     // 3. Encrypt with XChaCha20Poly1305
-    let cipher = XChaCha20Poly1305::new(&key_bytes.into());
+    let cipher = XChaCha20Poly1305::new(&(*key_bytes).into());
     let mut nonce_bytes = [0u8; 24];
     rand::thread_rng().fill(&mut nonce_bytes);
     let nonce = XNonce::from(nonce_bytes);
 
     let ciphertext = cipher.encrypt(&nonce, data.as_ref()).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
-    // 4. Save to file (Salt + Nonce + Ciphertext)
-    let mut out_file = std::fs::File::create(path)?;
-    use std::io::Write;
-    out_file.write_all(&salt_bytes)?;
-    out_file.write_all(&nonce_bytes)?;
-    out_file.write_all(&ciphertext)?;
+    // 4. Write Salt + Nonce + Ciphertext to a temporary file, then rename it into place, so a
+    //    crash mid-write never destroys an existing vault.
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp_path = path.with_extension("vault-tmp");
+    {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut out_file = options.open(&tmp_path)?;
+        out_file.write_all(&salt_bytes)?;
+        out_file.write_all(&nonce_bytes)?;
+        out_file.write_all(&ciphertext)?;
+        out_file.sync_all()?;
+    }
+    std::fs::rename(&tmp_path, path)?;
 
     Ok(())
 }
 
 pub fn load_identity_from_vault(passphrase: &str, path: &Path) -> Result<Identity> {
     use std::io::Read;
-    let mut in_file = std::fs::File::open(path)?;
+    let mut in_file = std::fs::File::open(path)
+        .map_err(|e| anyhow::anyhow!("Could not open vault {}: {e}", path.display()))?;
     
     let mut salt_bytes = [0u8; 16];
     in_file.read_exact(&mut salt_bytes)?;
@@ -450,14 +466,16 @@ pub fn load_identity_from_vault(passphrase: &str, path: &Path) -> Result<Identit
     in_file.read_to_end(&mut ciphertext)?;
 
     // Derive key using Argon2
-    let mut key_bytes = [0u8; 32];
-    Argon2::default().hash_password_into(passphrase.as_bytes(), &salt_bytes, &mut key_bytes)
+    let mut key_bytes = Zeroizing::new([0u8; 32]);
+    Argon2::default().hash_password_into(passphrase.as_bytes(), &salt_bytes, &mut *key_bytes)
         .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
     // Decrypt
-    let cipher = XChaCha20Poly1305::new(&key_bytes.into());
+    let cipher = XChaCha20Poly1305::new(&(*key_bytes).into());
     let nonce = XNonce::from(nonce_bytes);
-    let plaintext = cipher.decrypt(&nonce, ciphertext.as_ref()).map_err(|_| anyhow::anyhow!("Invalid passphrase or corrupt vault"))?;
+    let plaintext = Zeroizing::new(
+        cipher.decrypt(&nonce, ciphertext.as_ref()).map_err(|_| anyhow::anyhow!("Wrong passphrase or corrupt vault"))?,
+    );
 
     // Parse identity
     if plaintext.len() < 8 { anyhow::bail!("Corrupt vault data"); }
@@ -476,3 +494,61 @@ pub fn load_identity_from_vault(passphrase: &str, path: &Path) -> Result<Identit
     })
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("aura-test-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn sign_verify_encrypt_decrypt_round_trip() {
+        let id = create_identity("pass", "alice", "ecc").unwrap();
+        let sig = sign_message(b"hello", &id.private_key, "pass").unwrap();
+        assert!(verify_message(b"hello", &sig, &id.public_key).unwrap());
+        assert!(verify_message(b"tampered", &sig, &id.public_key).is_err());
+
+        let ct = encrypt_message(b"secret", &[PublicKey { bytes: id.public_key.bytes.clone() }]).unwrap();
+        assert_eq!(decrypt_message(&ct, &id.private_key, "pass").unwrap(), b"secret");
+        assert!(decrypt_message(&ct, &id.private_key, "wrong").is_err());
+
+        let other = start_temporary_chat().unwrap();
+        assert!(decrypt_message(&ct, &other.private_key, "").is_err());
+    }
+
+    #[test]
+    fn file_round_trip_and_same_path_guard() {
+        let dir = temp_dir("files");
+        let (plain, enc, dec) = (dir.join("a.txt"), dir.join("a.gpg"), dir.join("a.out"));
+        std::fs::write(&plain, b"file body").unwrap();
+        let id = start_temporary_chat().unwrap();
+        encrypt_file(&plain, &enc, &[PublicKey { bytes: id.public_key.bytes.clone() }]).unwrap();
+        decrypt_file(&enc, &dec, &id.private_key, "").unwrap();
+        assert_eq!(std::fs::read(&dec).unwrap(), b"file body");
+
+        assert!(encrypt_file(&plain, &plain, &[PublicKey { bytes: id.public_key.bytes.clone() }]).is_err());
+        assert_eq!(std::fs::read(&plain).unwrap(), b"file body");
+
+        let other = start_temporary_chat().unwrap();
+        let bad = dir.join("bad.out");
+        assert!(decrypt_file(&enc, &bad, &other.private_key, "").is_err());
+        assert!(!bad.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn vault_round_trip() {
+        let dir = temp_dir("vault");
+        let path = dir.join("sub").join("id.vault");
+        let id = create_identity("pw", "bob", "ecc").unwrap();
+        save_identity_to_vault(&id, "pw", &path).unwrap();
+        let loaded = load_identity_from_vault("pw", &path).unwrap();
+        assert_eq!(loaded.public_key.bytes, id.public_key.bytes);
+        assert_eq!(loaded.private_key.bytes, id.private_key.bytes);
+        assert!(load_identity_from_vault("nope", &path).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

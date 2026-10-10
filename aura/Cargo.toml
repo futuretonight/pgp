@@ -7,20 +7,20 @@ edition = "2024"
 anyhow = "1.0.103"
 argon2 = "0.6.0"
 # onion-service-*: host our own .onion and connect to peers' .onion addresses.
-# pt-client: Tor bridges through pluggable transports (obfs4, Snowflake, meek).
-arti-client = { version = "0.47.0", features = ["onion-service-service", "onion-service-client", "pt-client"] }
+# pt-client: Tor bridges through pluggable transports (obfs4, Snowflake, webtunnel).
+# experimental-api: read the downloaded consensus (relay count shown in the UI).
+# static-sqlite: Arti's directory cache uses SQLite, which Windows does not ship.
+arti-client = { version = "0.47.0", features = ["onion-service-service", "onion-service-client", "pt-client", "experimental-api", "static-sqlite"] }
 chacha20poly1305 = "0.11.0"
 futures = "0.3"
 hex = "0.4.3"
-keepass = "0.13.10"
-libp2p = { version = "0.57.0", features = ["tokio", "macros", "kad", "ping", "identify", "noise", "yamux"] }
 rand = "0.8.5"
-rusqlite = { version = "0.40.2", features = ["bundled"] }
 safelog = "0.10"
 serde = { version = "1.0.229", features = ["derive"] }
 tokio = { version = "1.53.2", features = ["full"] }
 tor-cell = "0.47.0"
 tor-hsservice = "0.47.0"
+tor-netdir = "0.47.0"
 tor-rtcompat = "0.47.0"
 zeroize = { version = "1.9.0", features = ["derive"] }
 
